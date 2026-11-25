@@ -11,6 +11,12 @@ Every look at the site moves each game waiting on a bot. A move the site refuses
 offers a step our 1830 skips (cross-player train and private purchases) becomes that step's pass, as
 the extension's autoplay does; any other refusal, or a game the model can't follow, leaves the game
 alone until it changes (a human's undo, say) or the admin page says retry.
+
+Games of the other titles the hub has a policy for (1867: ``main.py advisor --title-policy``,
+:mod:`titled`) are played the same way, each move the policy's own. Our 1867 engine skips no step
+Ruby waits in (its cross-player rule only removes moves, so the bot passes or declines among its
+own), so a refused 1867 move is never turned into a pass: the engines disagree, and the game is left
+alone with the reason.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from rl18xx.agent.advisor.bot_hub import LOCAL, CannotMove, Connector
+from rl18xx.agent.advisor.live_game import SUPPORTED_TITLE
 
 POLL_SECONDS = 1.0  # between looks when no bot has a move to make
 IMPLICIT_PASS_STEPS = ("BuyTrain", "BuyCompany")  # as extension/src/autoplay.js
@@ -167,7 +174,8 @@ class LocalSite(Connector):
         except SiteError as e:
             if e.status in (0, 409):  # no answer / the game moved on: look again
                 return False
-            if not self._implicit_pass(game_id, view, player, last_id, result["action"]):
+            skips = str(game.get("title")) == SUPPORTED_TITLE  # only our 1830 skips steps Ruby waits in
+            if not skips or not self._implicit_pass(game_id, view, player, last_id, result["action"]):
                 self.hub.give_up(self.site, game_id, last_id, f'the site refused "{result["description"]}": {e}')
                 return False
             self.hub.moved(self.site, game_id, result["actor"], f"Pass ({view.get('step')}): the site refused {e}")

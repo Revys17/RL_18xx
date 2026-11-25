@@ -2411,6 +2411,52 @@ replace arguments in place. For a generic run:
 
 Two generic networks take ~70 MB; nothing else about the services changes.
 
+### 1867 bots on the local site (2026-11-25)
+
+Code: `rl18xx/agent/advisor/titled.py` (`TitledGame`, `TitledPolicy`), `BotHub.titled_move`; tests:
+`tests/agent/advisor/test_titled.py` (on the Ruby fixture `tests/fixtures/1867/hs_ahjzadkh_19792.json`, a tiny
+untrained 1867 checkpoint).
+
+`main.py advisor --bots --title-policy 1867=<generic checkpoint>[@T]` makes the local site's connector (`site_bots.py`)
+play 1867 bot seats too; the 1830 seats, the advice, the extension and the 18xx.games connector are unchanged (1867
+games on 18xx.games are refused: "local site only"). Each 1867 bot move:
+
+* **Following**: the site's action list filtered as Ruby's `Game.load` processes it (`ruby_filtered_actions`: undo /
+  redo, then each kept action followed by its recorded auto actions -- the 1867 importer's replay), replayed into
+  `engine_rs.BaseGame.new_titled("1867", ...)` seeded as Ruby seeds it (`settings.seed`, else the game id's digits),
+  the site's players as seats 1..N in the site's order. An extended list replays only its new actions, an undo the
+  whole game (milliseconds); an action the engine refuses stops the follower there (`error`) and the bots leave the
+  game with the reason.
+* **Agreement**: the entity Ruby waits for (the site's `bot_view`) must be the one our engine has to move (the first
+  step offer). One case of Ruby's view needs care: 1867's `HomeToken` step lists the Stock Round's player as acting
+  (with no actions of their own) while the won minor places its home token, and that player posts it; the same step
+  name on both sides counts as agreement. Anything else stops the bots with "the engines disagree" -- Ruby is the source
+  of truth, so that is a rules difference to fix, never papered over. Likewise a move Ruby refuses is never turned into
+  a pass in an 1867 game (1830's implicit passes exist because our 1830 engine skips steps; our 1867 engine skips none:
+  its cross-player rule only removes moves).
+* **The move**: the legal moves of the title's cross-player policy (`model_generic.legal_actions`, what the PG runs
+  trained on), so where Ruby offers a train or private bought from another player or a merger with another player's
+  minor the bot passes or declines among its own moves. One forward per decision (~15 ms on CPU): the move sampled from
+  softmax(log p / T) and an open price from the price head's sampled cell, exactly as the PG learner plays (price eps
+  0); T = the run's `learner_temperature` (`config.json` beside `learner/`) unless `@T` is given -- what the run's
+  evals measured. A single move with no price to choose is just played. Two Ruby HEAD dead ends are avoided as the 1867
+  wire fuzzer avoids them: a MajorTrainless choice into Ruby's stale-operator dead end is not sampled while another move
+  exists (`g1867_ruby_dead_end_choice`), and an auction bid keeps $5 back once every other player has less than $5.
+* **To the site**: the action as our engine logged it (a player entity as the site's user id), posted as the bot whose
+  turn Ruby says it is; the site adds Ruby's auto actions, which the follower replays.
+
+Before the switch, through the dev site's Ruby (`POST /api/bot/engine`: Ruby loads the game, says who it waits for and
+processes the move with its auto actions): the bots' moves at every 7th / 23rd position of the three 1867 fixtures, 106
+accepted, none refused (the only disagreement: an old record's merger order, pre-9655 -- shares dealt before tokens were
+reduced -- which a game on today's site can't reach); and four whole all-bot games played by this code with Ruby as the
+site (3 / 4 / 5 / 6 players: 704 / 788 / 662 / 860 moves, 81-152 of them forced), every one finished in Ruby and in our
+engine, no refusal, no disagreement (the first try found Ruby's HomeToken view above).
+
+Served on the dev site only (18xx-next on :9301, `rl18xx-bot-backend-next` on :5014): gpg1867_a4 u600 (beats the
+supervised 1867 model .968 in 4-player 2v2 games), copied to `~/longrun/work/bots/gpg1867_a4_20261122/learner/600.pth`
+with its run's `config.json` (T 0.5). The dev site offers 1867 bot tables (3-6 players, base rules) through its
+`BOT_TITLES`. The production bots (:5004) don't take `--title-policy` until Caleb says so.
+
 ### Not done / open
 
 1. **Head-to-head evals of generic searches: done** (2026-11-15, next section). The search-learning generator still has

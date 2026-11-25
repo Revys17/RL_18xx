@@ -1637,6 +1637,12 @@ def build_parser():
         "on the admin page /admin (rl18xx/agent/advisor/bot_hub.py)",
     )
     p.add_argument(
+        "--title-policy", type=str, action="append", default=[], metavar="TITLE=CHECKPOINT[@T]",
+        help="--bots: also play bot seats of TITLE (1867) on the local site, with this title-generic checkpoint's "
+        "own moves (no search), sampled at softmax(log p / T) (default T: its run's learner_temperature, as its "
+        "evals played). Repeatable (rl18xx/agent/advisor/titled.py)",
+    )
+    p.add_argument(
         "--bot-settings", type=str, default="~/.config/18xx/bot_hub.json",
         help="The bots' settings, as the admin page saves them (default: ~/.config/18xx/bot_hub.json)",
     )

@@ -6,6 +6,10 @@ share: the settings (a JSON file, changed from the admin page, :mod:`admin`), th
 in, the event log, and the step every connector takes for a bot seat's move (:meth:`BotHub.search_move`:
 the advisor's search, as the extension's autoplay runs it). The advisor searches one position at a
 time, so the connectors take turns with each other and with the extension.
+
+Games of another title the hub has a policy for (``titled``: ``main.py advisor --title-policy
+1867=<checkpoint>``, :mod:`titled`) are followed and played by that policy alone, no search, on the
+local site only; 18xx.games stays 1830-only.
 """
 
 from __future__ import annotations
@@ -147,8 +151,10 @@ class Connector:
 
 
 class BotHub:
-    def __init__(self, advisor, settings_path, connectors: Optional[dict] = None):
+    def __init__(self, advisor, settings_path, connectors: Optional[dict] = None, titled: Optional[dict] = None):
         self.advisor = advisor
+        # title -> titled.TitledPolicy: the titles other than 1830 the bots play (on the local site)
+        self.titled = dict(titled or {})
         self.settings_path = Path(settings_path).expanduser()
         self.settings = self._load_settings()
         self.started = time.time()
@@ -285,7 +291,10 @@ class BotHub:
     def search_move(self, site: str, game: dict, view: dict, bots, readouts: int) -> Optional[dict]:
         """The model's move for the bot that must act in ``game`` (the site's game data; ``view``: the
         site engine's view of who acts, as ``autoplay.SiteView`` reads it; ``bots``: the bots' player
-        ids): the advisor's job result, or None while another search runs. Raises :class:`CannotMove`."""
+        ids): the advisor's job result, or None while another search runs. Raises :class:`CannotMove`.
+        A game of a title in ``titled`` gets that policy's move instead (:meth:`titled_move`)."""
+        if str(game.get("title") or "") in self.titled:
+            return self.titled_move(site, game, view, bots)
         problem = support_problem(game)
         if problem:
             raise CannotMove(problem)
@@ -305,15 +314,32 @@ class BotHub:
             raise CannotMove(f"the model's move failed: {job.error or job.status}")
         return job.result
 
-    def _follow(self, key, game: dict) -> LiveGame:
+    def titled_move(self, site: str, game: dict, view: dict, bots) -> dict:
+        """The move of the ``titled`` policy for ``game``'s title (:meth:`titled.TitledPolicy.move`), played at
+        once; the local site only. Raises :class:`CannotMove`."""
+        from rl18xx.agent.advisor.titled import TitledGame
+
+        title = str(game.get("title"))
+        if site != LOCAL:
+            raise CannotMove(f"The {title} bots play on the local site only.")
+        key = (site, game["id"])
+        try:
+            live = self._follow(key, game, TitledGame)
+            seats = [i + 1 for i, player in enumerate(game["players"]) if player["id"] in bots]
+            return self.titled[title].move(live, SiteView.parse(view), seats)
+        except (AutoplayError, UnsupportedGame) as e:
+            self.live.pop(key, None)
+            raise CannotMove(str(e)) from None
+
+    def _follow(self, key, game: dict, kind=LiveGame):
         live = self.live.get(key)
-        if live is not None:
+        if isinstance(live, kind):
             try:
                 live.update(game)
                 return live
             except Exception:
                 pass
-        live = self.live[key] = LiveGame(game)
+        live = self.live[key] = kind(game)
         return live
 
     # ---------------------------------------------------------- the admin page

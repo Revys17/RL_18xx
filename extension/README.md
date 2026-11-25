@@ -137,6 +137,10 @@ uv run python main.py advisor --device cpu \
 # ... --play-mode policy             # or the policy alone (~0.02 s a move)
 ```
 
+The panel, the advice and hotseat autoplay are 1830-only. The bot service (`--bots`) also plays **1867** bot seats on
+the local site with `--title-policy 1867=<generic 1867 checkpoint>[@T]`: the checkpoint's own moves, no search, sampled
+at its run's `learner_temperature` unless `@T` says otherwise (docs/rl_model.md "1867 bots on the local site").
+
 ## What the panel shows
 
 - Status lines: backend unreachable, unsupported game (another title, or an

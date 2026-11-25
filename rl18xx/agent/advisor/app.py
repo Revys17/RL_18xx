@@ -326,6 +326,32 @@ def load_models(args, device: str):
     )
 
 
+def parse_title_policy(spec: str) -> tuple:
+    """``(title, checkpoint, temperature or None)`` of ``--title-policy <title>=[generic:]<checkpoint>[@<T>]``."""
+    from rl18xx.agent.alphazero.game_network import spec_path
+
+    title, sep, rest = str(spec).partition("=")
+    if not sep or not title or not rest:
+        raise ValueError(f"--title-policy {spec!r}: <title>=<checkpoint>[@<temperature>]")
+    path, at, temperature = spec_path(rest).rpartition("@")
+    if not at:
+        path, temperature = spec_path(rest), ""
+    return title, path, float(temperature) if temperature else None
+
+
+def load_title_policies(args, device: str) -> dict:
+    """``--title-policy`` -> {title: ``titled.TitledPolicy``}: the bots' policies for titles other than 1830."""
+    from rl18xx.agent.advisor.titled import TitledPolicy
+
+    policies = {}
+    for spec in getattr(args, "title_policy", None) or []:
+        title, path, temperature = parse_title_policy(spec)
+        if title in policies:
+            raise ValueError(f"--title-policy: {title} given twice")
+        policies[title] = TitledPolicy(title, path, device=device, temperature=temperature)
+    return policies
+
+
 def run(args) -> None:
     """``main.py advisor``: load the checkpoints and serve on ``--host`` (127.0.0.1 by default)."""
     import torch
@@ -335,6 +361,10 @@ def run(args) -> None:
         torch.set_num_threads(args.cpu_threads)
     models = load_models(args, device)
     labels = models.labels
+    title_policies = load_title_policies(args, device)
+    for title, policy in title_policies.items():
+        labels[f"play_{title}"] = policy.label  # shown by /api/health and the admin page
+        LOGGER.info("The bots play %s seats with %s (policy only, no search)", title, policy.label)
     LOGGER.info(
         "The model plays seats with %s + value %s (%s head; private auction: %s + %s; mode %s; prior T %s)",
         labels["play_policy"],
@@ -352,7 +382,7 @@ def run(args) -> None:
         from rl18xx.agent.advisor import admin
         from rl18xx.agent.advisor.bot_hub import BotHub
 
-        hub = BotHub(advisor, args.bot_settings)
+        hub = BotHub(advisor, args.bot_settings, titled=title_policies)
         admin.register(app, hub, admin.read_password(args.admin_password_file))
         hub.start()
         LOGGER.info(
