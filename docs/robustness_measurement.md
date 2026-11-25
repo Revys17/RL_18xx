@@ -525,6 +525,12 @@ auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
   `u1528_vs_bots/`): worth share 0.537; by arrangement AABB .863, ABBA .750, BBAA .650, ABAB .588, BABA .512,
   BAAB .388 (u1528 in the middle seats its weakest); 28 games (5.8%) at the length cap. It passes the swap gate's match;
   the swap waits for the user's OK. u900's full match started 23:07 (`u900_vs_bots/`).
+- **u900 searched is level with the live bots: 0.494 +- 0.023** (fair 0.50; 480 games, 2026-11-24 23:07 - 11-25
+  09:48; `u900_vs_bots/`): worth share 0.485; by arrangement BBAA .650, BAAB .637, ABAB .613, ABBA .525, AABB .325,
+  BABA .212; 66 games (13.8%) at the length cap, against u1528's 5.8% -- u900's tables stall more than twice as often.
+  Its stopped first run (.475 +- .046 over 120) agreed. **u1528 is the stronger candidate** (.625 vs .494, a gap of
+  about 4 SE), and the better one on weakness 1 (below); u900 is out. Neither is swapped in: the bots stay on gen6
+  until the user is happy with the 1830 model as a whole (2026-11-25).
 
 ### Caleb's openers, played out (2026-11-24, CPU)
 
