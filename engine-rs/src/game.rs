@@ -1120,6 +1120,10 @@ impl BaseGame {
     /// title's flow function returning it.
     fn transition_to_next_round(&mut self) {
         use crate::steps::FinishedRound;
+        if self.site_rules {
+            // Ruby Engine::Game::Base#transition_to_next_round! -> store_player_info
+            self.site_note_round_finished();
+        }
 
         // Round-exit bookkeeping: Stock hands the (possibly moved) priority
         // deal on to the rest of the game.
@@ -2021,6 +2025,10 @@ impl BaseGame {
             // loans go back to the bank pool.
             self.corporations[ci].loans = 0;
             self.loans_remaining += n;
+        }
+        if self.site_rules {
+            // Ruby Engine::Game::Base#end_game! -> store_player_info
+            self.site_note_round_finished();
         }
         self.finished = true;
     }

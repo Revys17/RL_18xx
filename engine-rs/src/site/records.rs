@@ -2,6 +2,7 @@
 //! no use for. Compiled in every build (`BaseGame::site` holds it), kept only in site mode (`site_rules`): a search
 //! clone of an RL game copies one null pointer.
 
+use crate::game::BaseGame;
 use std::collections::BTreeMap;
 
 /// One entry of a corporation's operating history (Ruby `OperatingInfo`, keyed by `[turn, round_num]`).
@@ -30,4 +31,42 @@ pub struct PlayerInfo {
 pub struct SiteRecords {
     pub op_history: BTreeMap<String, Vec<OpInfo>>,
     pub player_history: Vec<PlayerInfo>,
+}
+
+impl BaseGame {
+    /// A corporation's dividend step ran (Ruby `process_dividend` writes `operating_history[[turn, round_num]]`):
+    /// a dividend action, or the automatic withhold of a company that didn't run. Called only with `site_rules`.
+    pub(crate) fn site_note_operated(&mut self, corp: &str, revenue: i32, kind: &str, no_run: bool) {
+        let round = match &self.round {
+            crate::rounds::Round::Operating(s) => s.round_num,
+            _ => 1,
+        };
+        let turn = self.turn;
+        let Some(rec) = self.site.as_mut() else { return };
+        let list = rec.op_history.entry(corp.to_string()).or_default();
+        // one entry per [turn, round] (Ruby's hash key): a later write replaces it
+        list.retain(|e| !(e.turn == turn && e.round == round));
+        list.push(OpInfo { turn, round, revenue, kind: kind.to_string(), no_run });
+    }
+
+    /// A round has finished (Ruby `transition_to_next_round!` / `end_game!` call `store_player_info`). Called only
+    /// with `site_rules`.
+    pub(crate) fn site_note_round_finished(&mut self) {
+        if self.site.is_none() {
+            return;
+        }
+        let (short, num) = match &self.round {
+            crate::rounds::Round::Auction(_) => ("PR", 1),
+            crate::rounds::Round::Stock(_) => ("SR", 1),
+            crate::rounds::Round::Operating(s) => ("OR", s.round_num),
+            crate::rounds::Round::Merger(s) => ("MR", s.round_num),
+        };
+        let results = self.calculate_results();
+        let values: Vec<(u32, i32)> =
+            self.players.iter().map(|p| (p.id, results.get(&p.id).copied().unwrap_or(0))).collect();
+        let turn = self.turn;
+        if let Some(rec) = self.site.as_mut() {
+            rec.player_history.push(PlayerInfo { round: short.to_string(), turn, round_num: num, values });
+        }
+    }
 }

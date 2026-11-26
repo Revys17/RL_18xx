@@ -1072,6 +1072,11 @@ impl BaseGame {
         // Ruby writes operating_history at process_dividend — the corp has
         // now "operated" (gates SELL_AFTER=:operate sales).
         self.corporations[corp_idx].ever_operated = true;
+        if self.site_rules {
+            // Ruby Engine::Step::Dividend#process_dividend:
+            // operating_history[[turn, round_num]] = OperatingInfo
+            self.site_note_operated(&corp_sym, revenue, kind.as_str(), false);
+        }
 
         // The corporation-withheld part per kind (Ruby dividend_options:
         // withhold keeps all, half keeps `(rev/2/total).floor × total` —
@@ -2672,6 +2677,11 @@ impl BaseGame {
                     // operating_history ("operated", SELL_AFTER=:operate).
                     self.corporations[corp_idx].ever_operated = true;
                     if revenue == 0 {
+                        if self.site_rules {
+                            // Ruby Engine::Step::Dividend#skip!: a `withhold`
+                            // dividend with no routes (operating_history entry)
+                            self.site_note_operated(&corp_sym, 0, "withhold", true);
+                        }
                         if let Some(sp) = self.corporations[corp_idx].share_price.clone() {
                             let (nr, nc) = self.stock_market.move_left(sp.row, sp.column);
                             if let Some(new_sp) = self.stock_market.share_price_at(nr, nc) {
