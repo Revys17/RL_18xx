@@ -710,6 +710,12 @@ impl BaseGame {
         if self.players[player_idx].cash < price {
             return Err(GameError::new("Cannot afford company"));
         }
+        if self.site_rules {
+            // Ruby Engine::Step::BuySellParShares#process_buy_company ->
+            // Engine::Game::Base#after_buy_company: the private's shares
+            // ability again (C&A's PRR_1), refused while a player holds it
+            self.site_after_buy_company(company_sym, player_id)?;
+        }
 
         self.players[player_idx].cash -= price;
         self.players[seller_idx].cash += price;
