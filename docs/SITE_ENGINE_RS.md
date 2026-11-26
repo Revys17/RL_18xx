@@ -333,6 +333,24 @@ The key is deliberately smaller than the client's Snapshot (which C compares aga
 what decides a game (money, holdings, track, tokens, trains, who acts and what they may do) and cheap to read in MRI.
 A version change (v2) is a commit to this doc first; rows whose versions differ are `skipped`.
 
+**v1 as built** (A, `src/site/shadow.rs`, 2026-11-26; clarifications within v1, B's Ruby must do the same):
+- Finished: `acting` is `[]`, `entity` and `step` are `null`, `actions` is `[]` (bot_view returns before reading the
+  step; nobody acts in a finished game). `manually_ended` is a boolean (Ruby's `nil` before the end: `false`);
+  `game_end_reason` is `null` until finished; `result` is always present (the players' current values, keys as
+  strings).
+- Closed corporations are left out of `corps` and of every player's `shares` (Ruby's `close_corporation` deletes
+  them from `engine.corporations` and the holders' `shares_by_corporation`).
+- `corps.ipo`: the percent the IPO (the corporation) holds, 100 before par; `market` the pool's percent.
+- `tokens`: the corporation's used tokens in `corporation.tokens` order, `"#{t.hex.id}-#{t.city.index}"`.
+- `companies`: `"bank"` also for an unowned private (the auction).
+- `depot.upcoming`: Ruby's `depot.upcoming` (one D at a time: it is unlimited, `clone_unlimited`).
+- `hexes`: only hexes whose tile is not the original (`"#{tile.name}@#{tile.rotation}"`).
+- `last_action`: `state` mode: the raw action at `upto` (any type, e.g. `{"type": "undo"}`); `keys` mode: the kept
+  action the position follows, `null` at position 0. A `run_routes`: `{"revenues": [...], "extra_revenue": n,
+  "subsidy": n}` (no `type`; integers, Ruby's `nil` as 0). Rust prices each route itself on the position before it
+  (the stops its connection chains end at, each at its revenue in the phase).
+- `entity`: `id.to_s` (a player's id as a string, a corporation's or company's sym).
+
 ### 5.4 `site_engine` CLI (A owns it; B calls it)
 
 One JSON object on stdin, one JSON line on stdout; exit 0 whenever a verdict was reached (a Rust refusal included),
