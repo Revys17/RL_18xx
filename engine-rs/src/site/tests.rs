@@ -246,3 +246,25 @@ fn d_and_h_teleport_without_a_route_withholds_on_the_record() {
     );
 }
 
+
+#[test]
+fn d_and_h_teleport_without_a_route_operates_the_company_in_every_mode() {
+    // H5, unconditional part: the D&H branch's inline withhold is Ruby's Dividend#skip! -> process_dividend, so the
+    // company has operated (ever_operated), whether or not site_rules is on. CPR has operated before 17@246 (OR 4.1),
+    // so the flag is cleared first to see the branch set it.
+    let data = fixture("dh_teleport_no_route");
+    let a246 = data["actions"].as_array().unwrap().iter().find(|a| a["id"] == 246).unwrap().clone();
+    for site_rules in [true, false] {
+        let mut g = SiteGame::load(&data).unwrap();
+        g.run_to(Some(245));
+        let cpr = g.game.corp_idx["CPR"];
+        g.game.corporations[cpr].ever_operated = false;
+        g.game.site_rules = site_rules;
+        let price = g.game.corporations[cpr].share_price.as_ref().map(|p| p.price);
+        g.apply_engine(&a246).unwrap();
+        assert!(g.game.corporations[cpr].ever_operated, "site_rules {site_rules}");
+        // the rest of the branch as before: withheld (price left), on to Buy Trains
+        assert_eq!((price, g.game.corporations[cpr].share_price.as_ref().map(|p| p.price)), (Some(30), Some(20)));
+        assert_eq!(g.game.active_step_type(), "BuyTrain", "site_rules {site_rules}");
+    }
+}

@@ -909,6 +909,10 @@ impl BaseGame {
                         self.site_note_operated(corp_sym, 0, "withhold", true);
                     }
                     if let Some(&ci) = self.corp_idx.get(corp_sym.as_str()) {
+                        // Ruby Dividend#skip! runs process_dividend, which
+                        // writes operating_history: the corp has operated (as
+                        // the Dividend auto-skip arm sets it), in every mode
+                        self.corporations[ci].ever_operated = true;
                         for train in &mut self.corporations[ci].trains {
                             train.operated = true;
                         }

@@ -240,8 +240,8 @@ title re-checks this per title.
 | H5 | `process_action` (`game.rs`), the D&H teleport branch's inline auto-withhold (a company with trains and no route after D&H's token) | `if self.site_rules { self.site_note_operated(corp_sym, 0, "withhold", true) }` | `Engine::Step::Dividend#skip!` (a `withhold` with no routes; that branch never reaches H2's `operating_step_auto_skips`) (verification finding, 2026-11-26) |
 
 S2 and H2 touch the same function, `operating_step_auto_skips`; if X3 edits it, both wait for X3 and are re-applied on
-top. H5's branch (in `process_action`) also leaves `ever_operated` unset where the Dividend arm on master sets it; it
-has no effect in 1830 and is left for the training session.
+top. H5's branch (in `process_action`) also left `ever_operated` unset where the Dividend arm on master sets it; at
+the training session's review that is now set in every mode (U1, §4.6).
 
 ### 4.4 Group V: visibility only (`fn` → `pub(crate) fn`, bodies unchanged)
 
@@ -262,6 +262,18 @@ commit of A, under `--features python` and `--features site`. When X2/X3 land on
 digests move, the move is master's (the training session's commit message for X2 says its enumeration hashes are
 unchanged): re-pin from master itself in a separate commit that names the master commit.
 
+
+### 4.6 Group U: unconditional (asked for at the training session's review, 2026-11-26)
+
+| # | Function (file) | Edit | Ruby method it mirrors |
+|---|---|---|---|
+| U1 | `process_action_internal` (`game.rs`), the D&H teleport branch's inline auto-withhold (H5's place) | `self.corporations[ci].ever_operated = true`, in every mode (not only `site_rules`), as the Dividend auto-skip arm of `operating_step_auto_skips` does | `Engine::Step::Dividend#skip!` → `process_dividend` (`operating_history` written: the corporation has operated) |
+
+In 1830 the flag feeds only the encoder's "operated" feature (`rl/encode/encode.rs`; `SELL_AFTER = :operate` is
+1867's), and a company with trains at D&H's teleport has always operated before (it gets trains only in its own Buy
+Trains step, after its Dividend step), so no position changes: the neutrality digests are unchanged. Test:
+`site::tests::d_and_h_teleport_without_a_route_operates_the_company_in_every_mode` (17@246 with the flag cleared
+first, `site_rules` on and off; it fails without U1).
 ---
 
 ## 5. The server: shadow mode
