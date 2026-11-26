@@ -903,6 +903,11 @@ impl BaseGame {
             // and jump to BuyTrain (Python behavior).
             if let Some((ref corp_sym, has_trains)) = dh_post_token {
                 if has_trains && !self.can_run_route(corp_sym) {
+                    if self.site_rules {
+                        // Ruby Engine::Step::Dividend#skip!: a `withhold`
+                        // dividend with no routes (operating_history entry)
+                        self.site_note_operated(corp_sym, 0, "withhold", true);
+                    }
                     if let Some(&ci) = self.corp_idx.get(corp_sym.as_str()) {
                         for train in &mut self.corporations[ci].trains {
                             train.operated = true;
