@@ -494,31 +494,16 @@ impl BaseGame {
         self.special_lay_companies(&corp_eid)
     }
 
-    /// Check if a company exchange is available (any round, the exchange
-    /// company not closed, the target corporation has non-president shares
-    /// outside player hands). 1830: MH -> NYC.
+    /// Check if a company exchange is available. 1830: MH -> NYC.
     ///
     /// Test-only: production uses the per-company
     /// `steps::company_exchange_available`; the sole remaining caller is the
     /// legacy oracle.
     #[cfg(test)]
     fn exchange_ability_available(&self) -> bool {
-        self.companies.iter().any(|co| {
-            if co.closed {
-                return false;
-            }
-            let Some((corporations, _)) = crate::abilities::exchange(&self.title, &co.sym) else {
-                return false;
-            };
-            corporations.iter().any(|corp_sym| {
-                self.corp_idx.get(*corp_sym).map_or(false, |&ci| {
-                    self.corporations[ci]
-                        .shares
-                        .iter()
-                        .any(|s| !s.president && !s.owner.is_player())
-                })
-            })
-        })
+        // The same per-company rule as production (Ruby `can_exchange?`: a
+        // player owner, an available share, the 60% holding limit).
+        self.companies.iter().any(|co| self.company_exchange_available(&co.sym))
     }
 
     /// Check if the active corp's president owns CS or DH with unused ability.

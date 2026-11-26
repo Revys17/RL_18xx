@@ -1007,27 +1007,61 @@ impl BaseGame {
         }
     }
 
-    /// Per-company exchange availability (1830: MH → NYC): company open, has
-    /// an exchange ability, and a target corporation still holds
-    /// non-president shares outside player hands.
-    fn company_exchange_available(&self, company_sym: &str) -> bool {
+    /// Per-company exchange availability (1830: MH → NYC), Ruby's
+    /// `Step::Exchange#can_exchange?`: the company is open, has an exchange
+    /// ability and is owned by a player (`owner_type: player`), and some
+    /// target corporation has a share the owner may gain (see
+    /// [`exchange_share_gainable`]). The dispatch gate reads this through the
+    /// Exchange step, so an exchange Ruby refuses is neither offered nor
+    /// accepted ("Blocking step ... cannot process action buy_shares").
+    pub(crate) fn company_exchange_available(&self, company_sym: &str) -> bool {
         let Some(co) = self.companies.iter().find(|c| c.sym == company_sym) else {
             return false;
         };
         if co.closed {
             return false;
         }
-        let Some((corporations, _)) = crate::abilities::exchange(&self.title, &co.sym) else {
+        let Some((corporations, from)) = crate::abilities::exchange(&self.title, &co.sym) else {
+            return false;
+        };
+        let Some(owner_pid) = co.owner.player_id() else {
             return false;
         };
         corporations.iter().any(|corp_sym| {
-            self.corp_idx.get(*corp_sym).map_or(false, |&ci| {
-                self.corporations[ci]
-                    .shares
-                    .iter()
-                    .any(|s| !s.president && !s.owner.is_player())
-            })
+            self.corp_idx
+                .get(*corp_sym)
+                .map_or(false, |&ci| self.exchange_share_gainable(ci, owner_pid, from))
         })
+    }
+
+    /// Ruby `can_exchange?`'s share test for one target corporation: an
+    /// available share from a listed source (the IPO's non-president share,
+    /// unissued shares counting as IPO, or the pool's), and `can_gain?` with
+    /// `exchange: true` — the cert limit waived, so the binding rule is
+    /// `holding_ok?`: the owner's percent plus one share at most the
+    /// corporation's `max_ownership_percent` (60% in 1830), unless its price
+    /// sits in a multiple_buy / unlimited zone. Before this, any open MH
+    /// could be exchanged by an owner already holding 60% of NYC (dev site
+    /// game 11 @203; the policy enumeration, `factored_company_actions`,
+    /// always had the rule).
+    fn exchange_share_gainable(&self, ci: usize, owner_pid: u32, from: &[crate::title::ShareSource]) -> bool {
+        let corp = &self.corporations[ci];
+        let from_ipo = from.contains(&crate::title::ShareSource::Ipo);
+        let from_market = from.contains(&crate::title::ShareSource::Market);
+        let available = corp.shares.iter().any(|s| {
+            !s.president
+                && ((from_ipo && (s.owner.is_ipo() || s.owner.is_none())) || (from_market && s.owner.is_market()))
+        });
+        if !available {
+            return false;
+        }
+        const OWNERSHIP_EXEMPT: &[&str] = &["multiple_buy", "unlimited"];
+        let zone_exempt = corp
+            .share_price
+            .as_ref()
+            .is_some_and(|sp| sp.types.iter().any(|t| OWNERSHIP_EXEMPT.contains(&t.as_str())));
+        let owner_pct = corp.percent_owned_by(&EntityId::player(owner_pid));
+        zone_exempt || owner_pct + corp.share_unit_percent <= corp.max_ownership_percent
     }
 
     // -- step.actions(entity) -------------------------------------------------
@@ -1760,6 +1794,71 @@ mod tests {
         for i in 0..g30.corporations.len() {
             assert_eq!(g30.corp_buying_power_full(i), g30.corporations[i].cash);
         }
+    }
+
+    /// MH's exchange follows Ruby's `Step::Exchange#can_exchange?`: an owner
+    /// already holding 60% of NYC may not exchange (dev site game 11 @203:
+    /// Ruby "Blocking step Sell/Buy/Sell Shares cannot process action
+    /// buy_shares"), nor may a corporation-owned MH; at 50% the exchange is
+    /// offered and accepted.
+    #[test]
+    fn mh_exchange_follows_rubys_holding_limit_and_owner_type() {
+        let mut game = new_4p_game();
+        let mut rng = StdRng::seed_from_u64(7);
+        let company_offset = crate::action_index::layout().action_offsets["CompanyBuyShares"];
+        while !matches!(game.round, Round::Stock(_)) {
+            let choices = game.get_factored_choices_impl();
+            let la = &choices[rng.gen_range(0..choices.len())];
+            let idx = crate::action_index::legal_action_to_index(la).unwrap();
+            let price = la.price_range.map(|(lo, hi)| rng.gen_range(lo..=hi));
+            let action = game.build_action(la, idx, idx >= company_offset, price).unwrap();
+            game.process_action_internal(&action).unwrap();
+        }
+        let pid = game.round_state.active_entity_id.player_id().unwrap();
+        let mh = game.company_idx["MH"];
+        game.companies[mh].owner = EntityId::player(pid);
+        let ci = game.corp_idx["NYC"];
+        let free: Vec<usize> = (0..game.corporations[ci].shares.len())
+            .filter(|&i| {
+                let s = &game.corporations[ci].shares[i];
+                !s.president && !s.owner.is_player()
+            })
+            .collect();
+        assert!(free.len() >= 7, "NYC still unparred in the first stock round");
+        for &i in &free[..6] {
+            game.corporations[ci].set_share_owner(i, EntityId::player(pid));
+        }
+        let exchange = Action::BuyShares {
+            entity_id: "MH".to_string(),
+            corporation_sym: "NYC".to_string(),
+            shares: vec![],
+            percent: 10,
+            source: "ipo".to_string(),
+            share_indices: vec![],
+        };
+        let offers_exchange =
+            |g: &mut BaseGame| g.get_factored_choices_impl().iter().any(|c| c.action_type == "CompanyBuyShares");
+
+        // 60% of NYC: no exchange.
+        assert!(!game.company_exchange_available("MH"));
+        assert!(!offers_exchange(&mut game));
+        // (The dispatch gate rejects before any handler runs: no state changes.)
+        let err = game.process_action_internal(&exchange).unwrap_err();
+        assert!(format!("{}", err).contains("cannot process action buy_shares"), "{}", err);
+
+        // MH owned by a corporation: no exchange, whatever the holdings.
+        game.corporations[ci].set_share_owner(free[5], EntityId::none());
+        game.companies[mh].owner = EntityId::corporation("PRR");
+        assert!(!game.company_exchange_available("MH"));
+        assert!(game.process_action_internal(&exchange).is_err());
+        game.companies[mh].owner = EntityId::player(pid);
+
+        // 50% of NYC, MH the player's: offered and accepted; MH closes.
+        assert!(game.company_exchange_available("MH"));
+        assert!(offers_exchange(&mut game));
+        game.process_action_internal(&exchange).unwrap();
+        assert!(game.companies[mh].closed);
+        assert_eq!(game.corporations[ci].percent_owned_by(&EntityId::player(pid)), 60);
     }
 
     #[test]
