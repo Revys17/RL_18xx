@@ -33,6 +33,17 @@ pub struct SiteRecords {
     pub player_history: Vec<PlayerInfo>,
 }
 
+/// A round's short name as Ruby's `store_player_info` writes it (`round.short_name`): "PR" the private auction,
+/// "SR", "OR", "MR".
+pub fn round_short(round: &crate::rounds::Round) -> &'static str {
+    match round {
+        crate::rounds::Round::Auction(_) => "PR",
+        crate::rounds::Round::Stock(_) => "SR",
+        crate::rounds::Round::Operating(_) => "OR",
+        crate::rounds::Round::Merger(_) => "MR",
+    }
+}
+
 impl BaseGame {
     /// A corporation's dividend step ran (Ruby `process_dividend` writes `operating_history[[turn, round_num]]`):
     /// a dividend action, or the automatic withhold of a company that didn't run. Called only with `site_rules`.
@@ -55,12 +66,8 @@ impl BaseGame {
         if self.site.is_none() {
             return;
         }
-        let (short, num) = match &self.round {
-            crate::rounds::Round::Auction(_) => ("PR", 1),
-            crate::rounds::Round::Stock(_) => ("SR", 1),
-            crate::rounds::Round::Operating(s) => ("OR", s.round_num),
-            crate::rounds::Round::Merger(s) => ("MR", s.round_num),
-        };
+        // Ruby's round_num: 1 outside operating and merger rounds
+        let (short, num) = (round_short(&self.round), self.round.round_num().max(1));
         let results = self.calculate_results();
         let values: Vec<(u32, i32)> =
             self.players.iter().map(|p| (p.id, results.get(&p.id).copied().unwrap_or(0))).collect();

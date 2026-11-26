@@ -189,6 +189,23 @@ impl Clone for SiteGame {
 fn atype(a: &Value) -> &str {
     a.get("type").and_then(Value::as_str).unwrap_or("")
 }
+
+/// Ruby's `disable?` of each program (`Engine::Action::Program*`) in a round of this kind (the records' short
+/// names: "SR" stock, "OR" operating, "PR" the private auction, "MR" merger).
+fn program_disabled(p: &Value, kind: &str) -> bool {
+    let indefinite = p.get("indefinite").and_then(Value::as_bool).unwrap_or(false);
+    match atype(p) {
+        "program_buy_shares" => kind != "SR",
+        "program_share_pass" => kind != "SR" && !indefinite,
+        "program_auction_bid" | "program_harzbahn_draft_pass" => kind != "PR",
+        "program_merger_pass" => kind != "MR",
+        "program_independent_mines" => kind != "OR" && !indefinite,
+        "program_close_pass" => false,
+        // Engine::Action::ProgramEnable#disable?
+        _ => true,
+    }
+}
+
 fn aid(a: &Value) -> i64 {
     a.get("id").and_then(Value::as_i64).unwrap_or(0)
 }
@@ -311,14 +328,9 @@ impl SiteGame {
             self.current_action_id = id;
             return None;
         }
-        let before = self.turn_key();
         self.turn_advanced = false;
         match self.apply(&a) {
             Ok(()) => {
-                let after = self.turn_key();
-                if (after.0, after.1, after.2) != (before.0, before.1, before.2) {
-                    self.round_changed();
-                }
                 // Ruby next_turn!: once per action whose processing advanced the round's entity
                 if self.turn_advanced {
                     self.last_turn_start = self.turn_start;
@@ -372,6 +384,14 @@ impl SiteGame {
             if self.game.finished {
                 return Err(refused("Game is already finished"));
             }
+            // Ruby process_single_action's master-mode line: a user who isn't the action's player (end_game has none)
+            if let Some(user) = a.get("user").and_then(Value::as_u64) {
+                let player = super::json::entity_of(a).ok().and_then(|e| e.parse::<u64>().ok());
+                if player != Some(user) {
+                    let name = self.players.iter().find(|p| p.0 as u64 == user).map(|p| p.1.clone()).unwrap_or_else(|| "Owner".into());
+                    self.log_push(format!("• Action({t}) via Master Mode by: {name}"));
+                }
+            }
             let who = self.entity_name(a);
             self.log_push(format!("Game ended manually by {who}"));
             self.manually_ended = true;
@@ -418,13 +438,18 @@ impl SiteGame {
         let log_before = self.site_log.then(|| super::log::before(self));
         let key_before = self.turn_key();
         let step_before = self.game.active_step_type();
+        let rounds_before = self.finished_rounds();
         self.game.process_action_internal(&action)?;
         self.engine_count += 1;
+        self.check_programs(rounds_before, was_finished);
         // the turn in progress (Ruby's round.current_actions), move by move, auto actions included: Ruby advances the
         // round's entity index (next_turn!) also when it comes back round to the same player (the others skipped,
         // "has no valid actions and passes"), so in a stock round a turn that hasn't acted is a new one
+        // A private's move (M&H's exchange) is the Exchange step's: it never starts a turn (Ruby's step calls no
+        // next_turn!, and the stock turn's current_actions are BuySellParShares's own)
         let key_after = self.turn_key();
-        let stock_new = matches!(&self.game.round, crate::rounds::Round::Stock(s) if !s.acted_this_turn);
+        let by_company = a.get("entity_type").and_then(Value::as_str) == Some("company");
+        let stock_new = !by_company && matches!(&self.game.round, crate::rounds::Round::Stock(s) if !s.acted_this_turn);
         if key_after != key_before || stock_new {
             self.turn_advanced = true;
             self.turn_actions.clear();
@@ -534,7 +559,9 @@ impl SiteGame {
         (self.game.turn, self.game.round.round_num())
     }
 
-    /// A `program_*` action: Ruby's Step::Program keeps one per type per player (`program_disable` drops them all).
+    /// A `program_*` action: Ruby's Step::Program (`ALLOW_MULTIPLE_PROGRAMS` false, 1830 as the base): enabling a
+    /// program first drops the player's last one (`remove_programmed_action`: `programmed_actions[entity].last`), so a
+    /// player has one program at a time; `program_disable` drops the last one.
     fn note_program(&mut self, a: &Value) {
         let pid = match super::json::entity_of(a).ok().and_then(|e| e.parse::<u32>().ok()) {
             Some(p) => p,
@@ -542,10 +569,8 @@ impl SiteGame {
         };
         let t = atype(a).to_string();
         let list = self.programs.entry(pid).or_default();
-        if t == "program_disable" {
-            list.clear();
-        } else {
-            list.retain(|x| atype(x) != t);
+        list.pop();
+        if t != "program_disable" {
             let mut p = a.clone();
             if let Some(m) = p.as_object_mut() {
                 for k in ["id", "user", "created_at"] {
@@ -559,20 +584,30 @@ impl SiteGame {
         }
     }
 
-    /// A new round began: Ruby's `check_programmed_actions` drops the programs whose `disable?` holds (buying
-    /// shares, and passing for this stock round only, end outside a stock round).
-    fn round_changed(&mut self) {
-        if matches!(self.game.round, crate::rounds::Round::Stock(_)) {
-            return;
+    /// How many rounds have finished so far (the records' `store_player_info` entries: one per
+    /// `transition_to_next_round!`, and `end_game!`'s).
+    fn finished_rounds(&self) -> usize {
+        self.game.site.as_ref().map_or(0, |r| r.player_history.len())
+    }
+
+    /// Ruby's `check_programmed_actions`, which `transition_to_next_round!` runs after each round it starts: the
+    /// programs whose `disable?` holds in the new round are dropped. One move can start several rounds (a stock
+    /// round that ends into an operating round where no company operates, and on into the next stock round): each
+    /// is checked in turn. The rounds a move started are read from the records: every round that finished during
+    /// it but the first was started by it, and so is the round now unless the move ended the game (`end_game!`
+    /// writes the last round's entry and starts nothing, nor checks).
+    fn check_programs(&mut self, rounds_before: usize, was_finished: bool) {
+        let Some(rec) = self.game.site.as_ref() else { return };
+        let mut started: Vec<String> = rec.player_history.iter().skip(rounds_before).skip(1).map(|e| e.round.clone()).collect();
+        if rec.player_history.len() > rounds_before && !(self.game.finished && !was_finished) {
+            started.push(super::records::round_short(&self.game.round).to_string());
         }
-        for list in self.programs.values_mut() {
-            list.retain(|p| match atype(p) {
-                "program_buy_shares" => false,
-                "program_share_pass" => p.get("indefinite").and_then(Value::as_bool).unwrap_or(false),
-                _ => true,
-            });
+        for kind in started {
+            for list in self.programs.values_mut() {
+                list.retain(|p| !program_disabled(p, &kind));
+            }
+            self.programs.retain(|_, l| !l.is_empty());
         }
-        self.programs.retain(|_, l| !l.is_empty());
     }
 
     /// Any player has a program running (the server would expect the auto actions it sets off).
