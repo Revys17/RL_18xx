@@ -220,8 +220,9 @@ enumeration keeps the RL rule in every mode (the client's menu is own-only too).
 | S3 | `player_has_actions` (`rounds/stock.rs`) | `if self.site_rules && self.site_interplayer_purchase_open(..) { return true }`: the turn waits for the player | `Engine::Game::G1830::Step::BuySellParShares#purchasable_companies` (not bought, cash > 0, phase status `can_buy_companies_from_other_players`, not turn 1) → `Engine::Step::BuySellParShares#actions` |
 | S4 | `step_actions` (`steps.rs`), the Stock arm | push `"buy_company"` under the same condition | `Engine::Step::BuySellParShares#actions` (`actions << 'buy_company' if !purchasable_companies(entity).empty?`) |
 | S5 | `stock_process_buy_company` (`rounds/stock.rs`) | `if self.site_rules`: `bought_this_turn = true`, and the priority deal is not moved | `Engine::Step::BuySellParShares#process_buy_company` (`@round.current_actions << action`, so `bought?` via `PURCHASE_ACTIONS`; no `track_action`, so `@round.last_to_act` is unchanged) |
+| S6 | `stock_process_buy_company` (`rounds/stock.rs`), before the purchase moves anything | `if self.site_rules { self.site_after_buy_company(company_sym, player_id)? }`: the private's `shares` ability again (C&A's PRR_1): refused while a player holds the share ("Cannot buy share from player"), else the buyer takes it free and the presidency follows | `Engine::Step::BuySellParShares#process_buy_company` → `Engine::Game::Base#after_buy_company` → `SharePool#buy_shares(player, share, exchange: :free)` (verification finding, 2026-11-26) |
 
-The helpers the branches call (`site_interplayer_purchase_open`, `cross_player_train_buys`) live in
+The helpers the branches call (`site_interplayer_purchase_open`, `cross_player_train_buys`, `site_after_buy_company`) live in
 `src/site/rules.rs`, compiled in every build (they are the engine half of site mode; the rest of `src/site` needs the
 `site` feature). S5 is Ruby-faithful processing of a move the RL rules never make; it is behind `site_rules` because
 the Python importer path keeps today's behaviour (Python is frozen) and the training session may make it unconditional
@@ -236,9 +237,11 @@ title re-checks this per title.
 | H2 | `operating_step_auto_skips` (`rounds/operating.rs`), the Dividend auto-skip at revenue 0 | `... site_note_operated(corp, 0, "withhold", true)` | `Engine::Step::Dividend#skip!` (a `withhold` dividend with no routes) |
 | H3 | `transition_to_next_round` (`game.rs`) | `if self.site_rules { self.site_note_round_finished() }` | `Engine::Game::Base#transition_to_next_round!` → `store_player_info` |
 | H4 | `end_game` (`game.rs`) | same, before `finished = true` | `Engine::Game::Base#end_game!` → `store_player_info` |
+| H5 | `process_action` (`game.rs`), the D&H teleport branch's inline auto-withhold (a company with trains and no route after D&H's token) | `if self.site_rules { self.site_note_operated(corp_sym, 0, "withhold", true) }` | `Engine::Step::Dividend#skip!` (a `withhold` with no routes; that branch never reaches H2's `operating_step_auto_skips`) (verification finding, 2026-11-26) |
 
 S2 and H2 touch the same function, `operating_step_auto_skips`; if X3 edits it, both wait for X3 and are re-applied on
-top.
+top. H5's branch (in `process_action`) also leaves `ever_operated` unset where the Dividend arm on master sets it; it
+has no effect in 1830 and is left for the training session.
 
 ### 4.4 Group V: visibility only (`fn` → `pub(crate) fn`, bodies unchanged)
 
@@ -717,3 +720,38 @@ advisor's RL streams).
 row); M8 (tile drawings' location / borders: the pack's, C); the two menu singletons; S2's review note: the site's
 menu lists only the player's own companies' trains (Caleb's own-only rule, rl18xx-next CLIENT.md §14), while the
 engine processes cross-player purchases (`site_rules`), so the menu needs no cross-player list.
+
+### 11.1 The verification's findings, fixed (2026-11-26)
+
+The step-1 verification (a scratch stack played by the test users; Rust against Opal at every position; the site's
+Ruby judging cross-player moves) found these in package A. Each fix names the Ruby method it follows.
+
+| Finding | Fix | Where |
+|---|---|---|
+| D&H's teleport, a company with trains and no route: the automatic withhold was never recorded (Rust's last run and Spreadsheet missed the OR; the shadow `differs` at every move after) | **H5** (§4.3): the D&H branch of `process_action` records it (`Dividend#skip!`) | `game.rs`, own commit |
+| A "this stock round" pass program kept after a stock round ended through an operating round no company operates in (Ruby drops it there) | the site layer reads the rounds a move started from the records (`store_player_info`'s entries) and runs each program's `disable?` per round (`check_programmed_actions` after every `transition_to_next_round!`); one program per player (`ALLOW_MULTIPLE_PROGRAMS` false) | `src/site/game.rs` |
+| C&A bought from another player: Rust accepted every case and moved no share | **S6** (§4.2): `after_buy_company` -- refused while a player holds PRR_1, else the buyer takes it free | `rounds/stock.rs` (own commit), `src/site/rules.rs` |
+| The log left out an empty operating round (priority deal, heading, the privates' income) | the same records: Ruby's `next_round!` lines for every round a move went through | `src/site/log.rs` |
+| restartInfo: a turn opening with M&H's exchange started at the exchange | a private's move (the Exchange step's) starts no turn; the pass's words read BuySellParShares's own actions | `src/site/game.rs`, `log.rs` |
+
+Found on the way, also in `log.rs` (the log steps the verification counted): the opening lines' order (the phase before
+the optional rules), no "moves down from $X to $X" when a sale leaves the price in its cell (the spike's fallback;
+`log_share_price` writes nothing then), the sold-out rises and the corporations' private income in `Corporation#<=>`
+order, "-- The bank has broken --" where `Bank#spend` writes it, B&O's close before the phase, M&H's close on its
+exchange unlogged, D&H's lay-track skip once its token is placed or declined, no Buy Trains skip once that step has
+acted, a pending discard holding the skips, the home token's "must choose city for home token" after "operates", the
+auction's all-pass (minimum bid, or the privates' income), a bankruptcy's sales, end_game's master-mode line.
+
+| Check (after) | Before | After |
+|---|---|---|
+| Live scratch games (7, 3,908 positions; `site_replay --goldens`, the goldens of living-board's golden.cjs): snapshots | 3,813 | 3,907 (left: `snap.auctioning` at 18@6, which the client derives itself, `steps.ts`) |
+| same: log steps / lines | 3,524 / 6,115 | 3,908 / 6,167 (all) |
+| :9301 corpus against living-board's new Opal goldens (315 games, 82,083 positions): log steps / lines | 80,426 / 171,542 | 82,082 / 171,590 (left: one `log` action's consent line, which Opal's golden leaves out) |
+| Spike goldens (303 games, 78,809 positions): log steps / lines | 77,365 / 166,087 | 78,808 / 166,119 |
+| C&A bought between players, judged by the site's Ruby (the verification's `xplayer.rb`, C&A only, 4 per game, 331 distinct games) | 126 of the verification's cases disagreed | 842 cases, all agree: 785 refused by both, 57 accepted by both with equal keys |
+| Shadow key v1 against the reference Ruby key | 147,037 / 147,037 (:9301); 4,759 / 4,759 (fixtures) | unchanged |
+
+Left as they were: X3 (bankruptcy not offered at 3 corpus positions and one live one: the training session's; Rust
+should not be anyone's default until it lands), X1 (Caleb's), and the menu singletons of §11. S2, H2 (in
+`operating_step_auto_skips`, next to X3's buy-train area) and now S6 and H5 were made before X3 landed: re-checked,
+and re-applied if needed, when A rebases onto it.
