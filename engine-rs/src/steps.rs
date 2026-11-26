@@ -1492,6 +1492,12 @@ impl BaseGame {
                 if self.stock_can_bid_minor(s, pid) {
                     v.push("bid");
                 }
+                // site_rules: Ruby Engine::Step::BuySellParShares#actions
+                // (`actions << 'buy_company' if !purchasable_companies(entity).empty?`,
+                // G1830's purchasable_companies): another player's private.
+                if self.site_rules && self.site_interplayer_purchase_open(pid, s.bought_this_turn) {
+                    v.push("buy_company");
+                }
                 v.push("pass");
                 v
             }
