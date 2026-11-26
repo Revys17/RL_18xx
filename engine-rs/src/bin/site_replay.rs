@@ -1,0 +1,239 @@
+//! The spike's native harness (docs/WASM_ENGINE_SPIKE.md §4.3): replays site games strictly in the site layer and
+//! reports where they stop, whether finished games end with the site's result, and how long it takes.
+//!
+//! cargo run --release --no-default-features --features site --bin site_replay -- [<corpus dir or game .json>...]
+//!     [--report <json>] [--views] [--goldens <dir>] [--verbose]
+//!
+//! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
+//! the Opal goldens (B's `test/rust/golden.cjs`) where they exist.
+
+use engine_rs::site::game::SiteGame;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+fn corpus_files(args: &[String]) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for a in args {
+        let p = Path::new(a);
+        if p.is_dir() {
+            for e in std::fs::read_dir(p).unwrap().flatten() {
+                let q = e.path();
+                if q.extension().and_then(|x| x.to_str()) == Some("json") {
+                    out.push(q);
+                }
+            }
+        } else {
+            out.push(p.to_path_buf());
+        }
+    }
+    let num = |p: &PathBuf| p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(i64::MAX);
+    out.sort_by_key(|p| (num(p), p.clone()));
+    out
+}
+
+fn main() {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut inputs = Vec::new();
+    let mut report: Option<String> = None;
+    let mut goldens: Option<String> = None;
+    let mut views = false;
+    let mut verbose = false;
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--report" => {
+                report = argv.get(i + 1).cloned();
+                i += 1;
+            }
+            "--goldens" => {
+                goldens = argv.get(i + 1).cloned();
+                i += 1;
+            }
+            "--views" => views = true,
+            "--verbose" => verbose = true,
+            a => inputs.push(a.to_string()),
+        }
+        i += 1;
+    }
+    if inputs.is_empty() {
+        inputs.push(std::env::var("CORPUS").unwrap_or_else(|_| {
+            "/tmp/claude-1000/-home-revys-workspace/252285c2-5545-52b0-bcda-165a3e4e9ceb/scratchpad/wasm-spike/g9301".into()
+        }));
+    }
+    let files = corpus_files(&inputs);
+    // --at <gid>:<action id>: the engine's state after that action (debugging a stop)
+    if let Some(at) = std::env::var("SITE_AT").ok() {
+        let (gid, aid) = at.split_once(':').unwrap();
+        let path = files.iter().find(|p| p.file_stem().and_then(|s| s.to_str()) == Some(gid)).expect("game");
+        let data: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut g = SiteGame::load(&data).unwrap();
+        g.run_to(Some(aid.parse().unwrap()));
+        let snap = engine_rs::site::view::snapshot(&g, 0);
+        println!("stopped: {:?}", g.stopped);
+        println!("round {} step {:?} current {} active {}", snap["round"], snap["stepLabel"], snap["current"], snap["activePlayers"]);
+        println!("legal types: {:?}", engine_rs::site::debug_legal_types(&mut g));
+        println!("players: {}", snap["players"]);
+        if let Ok(hex) = std::env::var("SITE_TILES") {
+            println!("tiles {hex}: {:?}", engine_rs::site::menu::tile_options(&mut g, &hex, None));
+            println!("upgradeable: {:?}", engine_rs::site::debug_upgradeable(&g, &hex));
+        }
+        for pid in engine_rs::site::view::active_players(&g) {
+            println!("menu {pid}: {}", engine_rs::site::menu::menu(&mut g, pid));
+        }
+        return;
+    }
+
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut stops: BTreeMap<String, (usize, Vec<String>)> = BTreeMap::new();
+    let mut results: BTreeMap<String, usize> = BTreeMap::new();
+    let mut result_diffs: Vec<Value> = Vec::new();
+    let mut games: Vec<Value> = Vec::new();
+    let mut total_actions = 0usize;
+    let mut total_steps = 0usize;
+    let mut engine_ms = 0f64;
+    let mut slowest: Vec<(f64, String, usize)> = Vec::new();
+    let mut golden_stats = engine_rs::site::compare::Stats::default();
+
+    for path in &files {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let data: Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                *counts.entry("unreadable".into()).or_default() += 1;
+                if verbose {
+                    eprintln!("{}: {e}", path.display());
+                }
+                continue;
+            }
+        };
+        let gid = data.get("id").map(|v| v.to_string()).unwrap_or_else(|| path.display().to_string());
+        if data.get("title").and_then(Value::as_str) != Some("1830") {
+            *counts.entry("other title".into()).or_default() += 1;
+            continue;
+        }
+        let t0 = Instant::now();
+        let mut g = match SiteGame::load(&data) {
+            Ok(g) => g,
+            Err(e) => {
+                *counts.entry(format!("load: {e}")).or_default() += 1;
+                continue;
+            }
+        };
+        let golden = goldens.as_ref().and_then(|d| engine_rs::site::compare::load_golden(d, &gid));
+        let mut steps = 0usize;
+        if views || golden.is_some() {
+            let mut cmp = golden.as_ref().map(|gd| engine_rs::site::compare::GameCompare::new(gd));
+            if let Some(c) = cmp.as_mut() {
+                c.start(&mut g, &mut golden_stats);
+            }
+            while !g.done() {
+                if let Some(step) = g.process_next() {
+                    steps += 1;
+                    let snap = engine_rs::site::view::snapshot(&g, step.action_id);
+                    if let Some(c) = cmp.as_mut() {
+                        c.step(&mut g, &step, &snap, &mut golden_stats);
+                    }
+                }
+            }
+        } else {
+            g.run_to(None);
+            steps = g.index;
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        engine_ms += ms;
+        total_actions += g.raw.len();
+        total_steps += steps;
+        slowest.push((ms, gid.clone(), g.raw.len()));
+
+        let has_programs = g.raw.iter().any(|a| a.get("type").and_then(Value::as_str).is_some_and(|t| t.starts_with("program_")));
+        let status = if let Some(s) = &g.stopped {
+            let t = g.raw.iter().find(|a| a.get("id").and_then(Value::as_i64) == Some(s.action_id)).and_then(|a| a.get("type")).and_then(Value::as_str).unwrap_or("?").to_string();
+            let msg: String = s.message.chars().take(90).collect();
+            let key = format!("{t}: {msg}");
+            let e = stops.entry(key).or_default();
+            e.0 += 1;
+            if e.1.len() < 6 {
+                e.1.push(format!("{gid}@{}", s.action_id));
+            }
+            "stopped"
+        } else {
+            "ok"
+        };
+        *counts.entry(format!("{status}{}", if has_programs { " +programs" } else { "" })).or_default() += 1;
+
+        // finished games: the site's stored result
+        let site_finished = data.get("status").and_then(Value::as_str) == Some("finished");
+        let site_result = data.get("result").filter(|r| r.as_object().is_some_and(|o| !o.is_empty()));
+        if site_finished {
+            let key = if site_result.is_none() {
+                "no stored result".to_string()
+            } else if g.stopped.is_some() {
+                "stopped early".to_string()
+            } else if !g.finished() {
+                "not finished in Rust".to_string()
+            } else {
+                let mine: BTreeMap<String, i64> = g.result().iter().map(|(k, v)| (k.to_string(), *v as i64)).collect();
+                let theirs: BTreeMap<String, i64> = site_result
+                    .and_then(|r| r.as_object())
+                    .map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_i64().unwrap_or(0))).collect())
+                    .unwrap_or_default();
+                if mine == theirs {
+                    format!("equal ({})", g.end_reason().unwrap_or("?"))
+                } else {
+                    result_diffs.push(json!({"game": gid, "rust": mine, "site": theirs}));
+                    "differ".to_string()
+                }
+            };
+            *results.entry(key).or_default() += 1;
+        }
+        games.push(json!({
+            "id": gid, "actions": g.raw.len(), "steps": steps, "ms": (ms * 100.0).round() / 100.0,
+            "stopped": g.stopped.as_ref().map(|s| json!({"actionId": s.action_id, "message": s.message})),
+            "finished": g.finished(),
+        }));
+    }
+
+    slowest.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    println!("games: {}", games.len());
+    for (k, v) in &counts {
+        println!("  {k}: {v}");
+    }
+    println!("first stops (grouped):");
+    let mut sv: Vec<_> = stops.iter().collect();
+    sv.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+    for (k, (n, ex)) in sv.iter().take(30) {
+        println!("  {n:4}  {k}   e.g. {}", ex.join(" "));
+    }
+    println!("finished games vs the site's result:");
+    for (k, v) in &results {
+        println!("  {k}: {v}");
+    }
+    println!(
+        "time: {:.0} ms for {} raw actions ({} steps{}), {:.1} us/action",
+        engine_ms,
+        total_actions,
+        total_steps,
+        if views { ", with snapshots" } else { "" },
+        engine_ms * 1000.0 / total_actions.max(1) as f64
+    );
+    for (ms, gid, n) in slowest.iter().take(5) {
+        println!("  slowest: game {gid}: {n} actions in {ms:.1} ms");
+    }
+    if goldens.is_some() {
+        golden_stats.print();
+    }
+    if let Some(r) = report {
+        let out = json!({
+            "games": games.len(), "counts": counts, "stops": stops.iter().map(|(k, (n, ex))| json!({"key": k, "n": n, "examples": ex})).collect::<Vec<_>>(),
+            "results": results, "resultDiffs": result_diffs, "engineMs": engine_ms, "rawActions": total_actions,
+            "steps": total_steps, "views": views, "perGame": games, "goldens": golden_stats.to_json(),
+        });
+        std::fs::write(&r, serde_json::to_string_pretty(&out).unwrap()).unwrap();
+        println!("report: {r}");
+    }
+}
