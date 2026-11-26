@@ -303,3 +303,37 @@ pub fn key_now(g: &mut SiteGame) -> Value {
     let last = last_raw(g).cloned();
     key(g, last.as_ref())
 }
+
+/// FNV-1a 64 (stable on every platform: the native and the wasm build must agree byte for byte).
+struct Fnv(u64);
+impl Fnv {
+    fn add(&mut self, s: &str) {
+        for &x in (s.len() as u64).to_le_bytes().iter().chain(s.as_bytes()) {
+            self.0 = (self.0 ^ x as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+}
+
+/// The digest of a whole replay as the browser sees it (docs/SITE_ENGINE_RS.md §3.1 determinism, §8.2 native vs
+/// wasm): the start log, every step's JSON (action, log, snapshot) and shadow key, and at the end the snapshot, every
+/// seated player's menu and the replay's stop. `{digest, steps}`; equal in the native build and the wasm one.
+pub fn replay_digest(data: &Value) -> Result<Value, String> {
+    let mut g = SiteGame::load(data)?;
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    h.add(&json!(g.start_log).to_string());
+    let mut steps = 0usize;
+    while !g.done() {
+        if let Some(s) = g.process_next() {
+            steps += 1;
+            h.add(&super::view::step_json(&g, &s).to_string());
+            h.add(&key(&mut g, Some(&s.action)).to_string());
+        }
+    }
+    h.add(&super::view::snapshot(&g, g.current_action_id).to_string());
+    let pids: Vec<u32> = g.players.iter().map(|p| p.0).collect();
+    for pid in pids {
+        h.add(&super::menu::menu(&mut g, pid).to_string());
+    }
+    h.add(&format!("{:?}", g.stopped.as_ref().map(|s| (s.action_id, &s.message))));
+    Ok(json!({"digest": format!("{:016x}", h.0), "steps": steps}))
+}

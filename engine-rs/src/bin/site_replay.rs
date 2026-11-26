@@ -2,7 +2,7 @@
 //! reports where they stop, whether finished games end with the site's result, and how long it takes.
 //!
 //! cargo run --release --no-default-features --features site --bin site_replay -- [<corpus dir or game .json>...]
-//!     [--report <json>] [--views] [--goldens <dir>] [--verbose]
+//!     [--report <json>] [--views] [--goldens <dir>] [--verbose] [--digest]
 //!
 //! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
 //! the Opal goldens (B's `test/rust/golden.cjs`) where they exist.
@@ -39,6 +39,7 @@ fn main() {
     let mut report: Option<String> = None;
     let mut goldens: Option<String> = None;
     let mut views = false;
+    let mut digest = false;
     let mut verbose = false;
     let mut i = 0;
     while i < argv.len() {
@@ -52,6 +53,7 @@ fn main() {
                 i += 1;
             }
             "--views" => views = true,
+            "--digest" => digest = true,
             "--verbose" => verbose = true,
             a => inputs.push(a.to_string()),
         }
@@ -63,6 +65,19 @@ fn main() {
         }));
     }
     let files = corpus_files(&inputs);
+    // --digest: each game's replay digest (§8.2 native vs wasm; scripts/site_engine/pkg_smoke.cjs --digest)
+    if digest {
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(data) = serde_json::from_str::<Value>(&text) else { continue };
+            let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("?");
+            match engine_rs::site::shadow::replay_digest(&data) {
+                Ok(d) => println!("{name} {} {}", d["digest"].as_str().unwrap_or(""), d["steps"]),
+                Err(e) => println!("{name} error {}", e.split(':').next().unwrap_or("")),
+            }
+        }
+        return;
+    }
     // --at <gid>:<action id>: the engine's state after that action (debugging a stop)
     if let Some(at) = std::env::var("SITE_AT").ok() {
         let (gid, aid) = at.split_once(':').unwrap();

@@ -37,6 +37,14 @@ impl WasmGame {
         Ok(WasmGame { inner, checkpoints: Vec::new() })
     }
 
+    /// The digest of a whole replay (debugging, the native-vs-wasm check of §8.2): {digest, steps}, equal to
+    /// `site_replay --digest`'s.
+    #[wasm_bindgen(js_name = debugDigest)]
+    pub fn debug_digest(game_json: &str) -> Result<String, JsError> {
+        let data = parse(game_json)?;
+        super::shadow::replay_digest(&data).map(|v| v.to_string()).map_err(err)
+    }
+
     /// The engine's build: {engine: "engine-rs", commit, api: 2, key: 1, titles: ["1830"], features}. The worker
     /// falls back to Opal unless api === 2.
     pub fn version() -> String {

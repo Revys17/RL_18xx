@@ -3,16 +3,20 @@
 // load, replay to the end, view, shadowKey (must equal `site_engine state`'s), menu of every seated player,
 // programInfo, and the native-vs-wasm digest of every step's JSON when SITE_ENGINE is given.
 //
-//   node scripts/site_engine/pkg_smoke.cjs <pkg dir> <game.json>... [--native <site_engine>]
+//   node scripts/site_engine/pkg_smoke.cjs <pkg dir> <game.json | dir>... [--native <site_engine>]
+//   node scripts/site_engine/pkg_smoke.cjs <pkg dir> <game.json | dir>... --digest   (= site_replay --digest)
 const fs = require('fs'), vm = require('vm'), path = require('path'), crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const args = process.argv.slice(2);
 const pkg = args.shift();
-let native = null;
+let native = null, digestOnly = false;
 const games = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--native') native = args[++i];
-  else games.push(args[i]);
+  else if (args[i] === '--digest') digestOnly = true;
+  else if (fs.statSync(args[i]).isDirectory()) {
+    for (const f of fs.readdirSync(args[i]).filter((x) => x.endsWith('.json')).sort()) games.push(path.join(args[i], f));
+  } else games.push(args[i]);
 }
 // a worker-like global: the glue runs in its own realm (as importScripts would), so the bytes are copied into it
 const ctx = { console, TextDecoder, TextEncoder };
@@ -26,6 +30,18 @@ const version = JSON.parse(wb.WasmGame.version());
 if (version.api !== 2) throw new Error(`api ${version.api}`);
 console.log('version', JSON.stringify(version));
 let failures = 0;
+if (digestOnly) {
+  // `<file> <digest> <steps>` per game, as `site_replay --digest` prints (the native build)
+  for (const file of games) {
+    try {
+      const d = JSON.parse(wb.WasmGame.debugDigest(fs.readFileSync(file, 'utf8')));
+      console.log(`${path.basename(file)} ${d.digest} ${d.steps}`);
+    } catch (e) {
+      console.log(`${path.basename(file)} error ${String(e.message).split(':')[0]}`);
+    }
+  }
+  process.exit(0);
+}
 for (const file of games) {
   const text = fs.readFileSync(file, 'utf8');
   const data = JSON.parse(text);
