@@ -546,7 +546,7 @@ pub fn owned_companies(g: &SiteGame, owner: &EntityId) -> Vec<String> {
 }
 
 /// The depot's upcoming trains (Ruby holds one D at a time: it is unlimited).
-fn upcoming(g: &SiteGame) -> Vec<Value> {
+pub fn upcoming(g: &SiteGame) -> Vec<Value> {
     let mut out = Vec::new();
     let mut seen_d = false;
     for t in &g.game.depot.trains {

@@ -105,3 +105,42 @@ pub fn details(g: &mut SiteGame, parts: &Value) -> Result<Value, String> {
     }
     Ok(Value::Object(out))
 }
+
+/// The Auto tab's facts (living-board moves.ts `programInfo` / `ProgramInfo`): the program types 1830 offers (Ruby
+/// `available_programmed_actions`: ProgramBuyShares, ProgramSharePass), whether several may run at once
+/// (ALLOW_MULTIPLE_PROGRAMS false), whether stock passes are always unconditional (false), whether a stock round is
+/// on, the player's own programs (from the recorded `program_*` actions) and, for "buy until", the floated or
+/// parred corporations with shares in the IPO or the market (counts of certificates; `owned` in shares).
+pub fn program_info(g: &SiteGame, pid: u32) -> Value {
+    use crate::entities::EntityId;
+    if g.finished() || !g.game.players.iter().any(|p| p.id == pid) {
+        return Value::Null;
+    }
+    let pe = EntityId::player(pid);
+    let mut buyable = Vec::new();
+    for c in g.game.corporations.iter().filter(|c| !c.closed && c.ipo_price.is_some()) {
+        let ipo = c.shares.iter().filter(|s| !s.owner.is_player() && !s.owner.is_market()).count();
+        let market = c.shares.iter().filter(|s| s.owner.is_market()).count();
+        if ipo == 0 && market == 0 {
+            continue;
+        }
+        let owned_pct: u32 = c.shares.iter().filter(|s| s.owner == pe).map(|s| s.percent as u32).sum();
+        let held: u32 = c.shares.iter().filter(|s| s.owner.is_player() || s.owner.is_market()).map(|s| s.percent as u32).sum();
+        let ipo_pct = 100u32.saturating_sub(held) as i64;
+        let to_float = if c.floated { 0 } else { ipo_pct - (100 - c.float_percent as i64) };
+        // Ruby num_shares_of(corp, ceil: false): percent / share_percent (1830: 10%)
+        let owned = owned_pct as f64 / 10.0;
+        buyable.push(json!({"corp": c.sym, "floated": c.floated, "toFloat": to_float, "ipo": ipo, "market": market,
+                            "owned": if owned.fract() == 0.0 { json!(owned as i64) } else { json!(owned) }}));
+    }
+    let mine = super::view::programs(g).and_then(|p| p.get(pid.to_string()).cloned()).unwrap_or(json!([]));
+    json!({
+        "available": ["program_buy_shares", "program_share_pass"],
+        "multiple": false,
+        "forceUnconditional": false,
+        "stock": matches!(g.game.round, Round::Stock(_)),
+        "stockName": "Stock Round",
+        "mine": mine,
+        "buyable": buyable,
+    })
+}

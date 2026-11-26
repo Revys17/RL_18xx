@@ -1,6 +1,7 @@
-//! `WasmGame`: the site layer as a wasm-bindgen class (docs/WASM_ENGINE_SPIKE.md §3.2; the client's view of it is
-//! living-board `src/engine-rs/api.ts`). Every structured value crosses as a JSON string; errors are thrown as JS
-//! `Error`s whose message starts with a code: `unsupported:`, `refused:`, `internal:`.
+//! `WasmGame`, API 2: the site layer as a wasm-bindgen class (docs/SITE_ENGINE_RS.md §3.2, contract K1; the
+//! client's view of it is living-board `src/engine-rs/api.ts`). Every structured value crosses as a JSON string;
+//! errors are thrown as JS `Error`s whose message starts with a code: `unsupported:` (fall back to Opal),
+//! `refused:` (the engine refuses the action: its words), `resync:` (re-open the game), `internal:` (a bug).
 
 use super::game::SiteGame;
 use serde_json::{json, Value};
@@ -36,9 +37,10 @@ impl WasmGame {
         Ok(WasmGame { inner, checkpoints: Vec::new() })
     }
 
-    /// The engine's version and build (the features compiled in).
+    /// The engine's build: {engine: "engine-rs", commit, api: 2, key: 1, titles: ["1830"], features}. The worker
+    /// falls back to Opal unless api === 2.
     pub fn version() -> String {
-        json!({"engine": "engine-rs", "titles": ["1830"], "api": 1}).to_string()
+        super::cli::version().to_string()
     }
 
     #[wasm_bindgen(js_name = staticInfo)]
@@ -104,6 +106,28 @@ impl WasmGame {
         let (posted, step) = self.inner.act(&a).map_err(err)?;
         let step = step.map_or(Value::Null, |s| super::view::step_json(&self.inner, &s));
         Ok(json!({"posted": posted, "step": step}).to_string())
+    }
+
+    /// As `act`, on a copy: {posted} (the site action to post, no auto actions), or throws `refused:`. Nothing
+    /// changes here: the worker posts it, then appends the stored action the server returns (§7.1).
+    pub fn check(&self, action_json: &str) -> Result<String, JsError> {
+        let a = parse(action_json)?;
+        let mut copy = self.inner.clone();
+        copy.site_log = false;
+        let (posted, _step) = copy.act(&a).map_err(err)?;
+        Ok(json!({"posted": posted}).to_string())
+    }
+
+    /// The Auto tab's facts for a player (living-board ProgramInfo), or "null".
+    #[wasm_bindgen(js_name = programInfo)]
+    pub fn program_info(&self, player_id: u32) -> String {
+        super::details::program_info(&self.inner, player_id).to_string()
+    }
+
+    /// The shadow key v1 of the position now (§5.3): the same JSON `site_engine state` prints as `state`.
+    #[wasm_bindgen(js_name = shadowKey)]
+    pub fn shadow_key(&mut self) -> String {
+        super::shadow::key_now(&mut self.inner).to_string()
     }
 
     /// The move menu (RawMenu) of a player, or "null" when they needn't act.

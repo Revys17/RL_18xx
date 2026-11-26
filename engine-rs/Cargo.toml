@@ -50,6 +50,11 @@ panic = "abort"
 # The site layer's native tools (docs/SITE_ENGINE_RS.md §5.4, §8): never built by the wheel (maturin) or a default
 # `cargo build`.
 [[bin]]
+name = "site_engine"
+path = "src/bin/site_engine.rs"
+required-features = ["site"]
+
+[[bin]]
 name = "site_replay"
 path = "src/bin/site_replay.rs"
 required-features = ["site"]

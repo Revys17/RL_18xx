@@ -136,6 +136,9 @@ pub struct SiteGame {
     pub site_log: bool,
     /// The log lines written so far, in Ruby's words
     pub log: Vec<String>,
+    /// The engine's own price of the routes of the last `run_routes` processed (its action id, each route's
+    /// revenue), read on the position before it: the shadow key's `last_action` (§5.3)
+    pub last_run_prices: Option<(i64, Vec<i32>)>,
 }
 
 impl Clone for SiteGame {
@@ -172,6 +175,7 @@ impl Clone for SiteGame {
             holders: self.holders.clone(),
             site_log: self.site_log,
             log: self.log.clone(),
+            last_run_prices: self.last_run_prices.clone(),
         }
     }
 }
@@ -256,6 +260,7 @@ impl SiteGame {
             holders: HashMap::new(),
             site_log: true,
             log: Vec::new(),
+            last_run_prices: None,
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -362,6 +367,10 @@ impl SiteGame {
             self.game.end_game();
             self.log_game_over();
             return Ok(());
+        }
+        if t == "run_routes" {
+            let prices = super::shadow::price_routes(self, a).unwrap_or_default();
+            self.last_run_prices = Some((aid(a), prices));
         }
         self.apply_engine(a).map_err(|e| e.message)?;
         self.apply_autos(a)
@@ -637,11 +646,10 @@ impl SiteGame {
     }
 
     /// A move of this player's, as the page would post it: processed; returns the posted site action (id = the
-    /// current id + 1, no auto actions) and its step.
+    /// current id + 1, no auto actions) and its step. In a game where a player has a program the server adds the
+    /// auto actions this move sets off (docs/SITE_ENGINE_RS.md §7.1): the worker uses `check`, posts, and appends
+    /// the stored action instead.
     pub fn act(&mut self, a: &Value) -> Result<(Value, Option<StepOut>), String> {
-        if self.programs_enabled() && atype(a) != "message" && !atype(a).starts_with("program_") {
-            return Err(unsupported("programs: a player has programmed actions, whose auto actions the Rust engine can't make"));
-        }
         let mut posted = a.clone();
         let obj = posted.as_object_mut().ok_or_else(|| refused("an action must be an object"))?;
         for k in ["id", "user", "created_at", "auto_actions"] {

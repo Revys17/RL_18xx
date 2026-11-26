@@ -1,0 +1,268 @@
+//! The shadow key, v1 (docs/SITE_ENGINE_RS.md §5.3, contract K4): what decides a game -- money, holdings, track,
+//! tokens, trains, who acts and what they may do -- in Ruby's terms, so the server can compare engine-rs with its Ruby
+//! engine after every 1830 action. The Ruby twin is rl18xx-next `lib/engine_shadow.rb`; both print the same JSON.
+//!
+//! Hash keys sorted (serde_json's map), arrays in the order given, integers as integers. Players in Ruby's
+//! `engine.players` order (it rotates); corporations keyed by sym, closed ones left out (Ruby's `close_corporation`
+//! deletes them from `engine.corporations`). G19's cities in Ruby's numbering. Once the game is finished nobody acts:
+//! `acting` [], `entity` / `step` null, `actions` [] (bot_view returns before reading the step).
+
+use super::game::SiteGame;
+use super::json::tile_name;
+use crate::entities::EntityId;
+use crate::rounds::Round;
+use serde_json::{json, Map, Value};
+
+/// Ruby's active step's class name (`step.class.name.split('::').last`) in 1830's rounds, from the step the site
+/// layer already names (`view::step_label`, Ruby's `description`).
+pub fn ruby_step_class(g: &SiteGame) -> Option<&'static str> {
+    if g.game.finished {
+        return None;
+    }
+    let label = super::view::step_label(g)?;
+    Some(match label.as_str() {
+        "Bid on Companies" => "WaterfallAuction",
+        "Choose Corporation Par Value" => "CompanyPendingPar",
+        "Sell/Buy/Sell Shares" => "BuySellParShares",
+        "Discard Trains" => "DiscardTrain",
+        "Place teleport token" => "SpecialToken",
+        "Lay/Upgrade Track" => "Track",
+        "Place a Token" => "Token",
+        "Run Routes" => "Route",
+        "Pay or Withhold Dividends" => "Dividend",
+        "Buy Trains" => "BuyTrain",
+        "Buy Companies" => "BuyCompany",
+        l if l == "Place Home Token" || l == "Place Token" || (l.starts_with("Place ") && l.ends_with(" Home Token")) => {
+            "HomeToken"
+        }
+        _ => return None,
+    })
+}
+
+/// Ruby `step.actions(entity)` of the active step for its first active entity (bot_view's `actions`), in Ruby's
+/// order: the menu's `types`.
+pub fn ruby_actions(g: &mut SiteGame) -> Vec<String> {
+    if g.game.finished {
+        return Vec::new();
+    }
+    let mut types = super::menu::ruby_types(g);
+    if let Round::Stock(_) = g.game.round {
+        let pid = super::view::current_holder(g).and_then(|h| h.strip_prefix("p:").and_then(|p| p.parse::<u32>().ok()));
+        if let Some(pid) = pid {
+            if g.game.buyable_shares(pid).is_empty() {
+                types.retain(|t| t != "buy_shares");
+            }
+        }
+    }
+    types
+}
+
+/// The entity bot_view names: the active step's first active entity, or the round's current entity (`id.to_s`).
+pub fn ruby_entity(g: &SiteGame) -> Option<String> {
+    if g.game.finished {
+        return None;
+    }
+    let h = super::view::current_holder(g)?;
+    Some(match h.split_once(':') {
+        Some((_, id)) => id.to_string(),
+        None => h,
+    })
+}
+
+/// A corporation's used tokens as "<hex>-<city index on its tile>" (Ruby's numbering), in token order.
+fn token_places(g: &SiteGame, sym: &str, tokens: &[crate::entities::Token]) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in tokens.iter().filter(|t| t.used) {
+        let hex = &t.city_hex_id;
+        let Some(h) = g.game.hex_ref(hex) else {
+            out.push(format!("{hex}-?"));
+            continue;
+        };
+        let idx = h.tile.cities.iter().position(|c| c.tokens.iter().flatten().any(|x| x.corporation_id == sym));
+        let idx = match idx {
+            Some(i) if g.swapped.contains(&hex.as_str()) && h.tile.cities.len() == 2 => 1 - i,
+            Some(i) => i,
+            None => {
+                out.push(format!("{hex}-?"));
+                continue;
+            }
+        };
+        out.push(format!("{hex}-{idx}"));
+    }
+    out
+}
+
+/// The engine's own price of each route of a site `run_routes` (Ruby `Route#revenue` with nothing posted): the
+/// stops the connection chains end at, each at its revenue in the current phase. 1830 has no route bonuses.
+pub fn price_routes(g: &SiteGame, a: &Value) -> Option<Vec<i32>> {
+    let entity = a.get("entity").and_then(Value::as_str)?;
+    let routes = a.get("routes").and_then(Value::as_array)?;
+    let mut out = Vec::new();
+    for r in routes {
+        let conns: Vec<Vec<String>> = r
+            .get("connections")
+            .and_then(Value::as_array)?
+            .iter()
+            .map(|c| c.as_array().map(|xs| xs.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default())
+            .collect();
+        let hexes = crate::revenue::stop_hexes_from_connections(&conns).ok()?;
+        let mut sum = 0;
+        for h in hexes {
+            sum += crate::revenue::classify_stop(&g.game, &h, entity).ok()?.revenue;
+        }
+        out.push(sum);
+    }
+    Some(out)
+}
+
+fn owner_code(e: &EntityId) -> String {
+    if let Some(p) = e.player_id() {
+        format!("p{p}")
+    } else if let Some(c) = e.corp_sym().filter(|_| e.is_corporation()) {
+        format!("c{c}")
+    } else {
+        "bank".to_string()
+    }
+}
+
+/// The shadow key of the position now. `last` is the raw action the position follows (None at the start).
+pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
+    let finished = g.game.finished;
+    let info = super::view::round_info(g);
+    let acting: Vec<u32> = if finished { Vec::new() } else { super::view::active_players(g) };
+    let entity = ruby_entity(g);
+    let step = ruby_step_class(g);
+    let actions = ruby_actions(g);
+    let priority = super::view::priority(g);
+    let game = &g.game;
+
+    let mut players = Vec::new();
+    for pid in super::view::player_order(g) {
+        let Some(p) = game.players.iter().find(|p| p.id == pid) else { continue };
+        let pe = EntityId::player(pid);
+        let mut shares = Map::new();
+        for c in game.corporations.iter().filter(|c| !c.closed) {
+            let pct: u32 = c.shares.iter().filter(|s| s.owner == pe).map(|s| s.percent as u32).sum();
+            if pct > 0 {
+                shares.insert(c.sym.clone(), json!(pct));
+            }
+        }
+        let mut companies: Vec<String> =
+            game.companies.iter().filter(|c| c.owner == pe && !c.closed).map(|c| c.sym.clone()).collect();
+        companies.sort();
+        players.push(json!({"id": pid, "cash": p.cash, "shares": shares, "companies": companies, "bankrupt": p.bankrupt}));
+    }
+
+    let mut corps = Map::new();
+    for c in game.corporations.iter().filter(|c| !c.closed) {
+        let sp = c.share_price.as_ref();
+        let held: u32 = c.shares.iter().filter(|s| s.owner.is_player() || s.owner.is_market()).map(|s| s.percent as u32).sum();
+        let market: u32 = c.shares.iter().filter(|s| s.owner.is_market()).map(|s| s.percent as u32).sum();
+        let ce = EntityId::corporation(&c.sym);
+        let mut companies: Vec<String> =
+            game.companies.iter().filter(|m| m.owner == ce && !m.closed).map(|m| m.sym.clone()).collect();
+        companies.sort();
+        let last_run = game
+            .site
+            .as_ref()
+            .and_then(|r| r.op_history.get(&c.sym))
+            .and_then(|l| l.iter().max_by_key(|e| (e.turn, e.round)))
+            .map_or(Value::Null, |e| json!([e.turn, e.round, e.revenue, e.kind]));
+        corps.insert(
+            c.sym.clone(),
+            json!({
+                "cash": c.cash,
+                "price": sp.map(|s| s.price),
+                "cell": sp.map(|s| json!([s.row, s.column])),
+                "par": c.ipo_price.as_ref().map(|s| s.price),
+                "floated": c.floated,
+                "closed": c.closed,
+                "ipo": 100u32.saturating_sub(held),
+                "market": market,
+                "president": c.president_id(),
+                "trains": c.trains.iter().map(|t| t.id.clone()).collect::<Vec<_>>(),
+                "tokens": token_places(g, &c.sym, &c.tokens),
+                "companies": companies,
+                "last_run": last_run,
+            }),
+        );
+    }
+
+    let mut companies = Map::new();
+    for m in &game.companies {
+        companies.insert(m.sym.clone(), json!(if m.closed { "closed".to_string() } else { owner_code(&m.owner) }));
+    }
+
+    let upcoming: Vec<Value> = super::view::upcoming(g).into_iter().map(|t| t["id"].clone()).collect();
+    let discarded: Vec<String> = game.depot.discarded.iter().map(|t| t.id.clone()).collect();
+
+    let mut hexes = Map::new();
+    for h in &game.hexes {
+        if let Some(name) = tile_name(&h.tile.name) {
+            hexes.insert(h.id.clone(), json!(format!("{name}@{}", h.tile.rotation)));
+        }
+    }
+
+    let mut result = Map::new();
+    for (id, v) in g.result() {
+        result.insert(id.to_string(), json!(v));
+    }
+
+    let last_action = match last {
+        None => Value::Null,
+        Some(a) => {
+            let t = a.get("type").and_then(Value::as_str).unwrap_or("");
+            if t == "run_routes" {
+                let id = a.get("id").and_then(Value::as_i64).unwrap_or(0);
+                let revenues = match &g.last_run_prices {
+                    Some((pid, revs)) if *pid == id => json!(revs),
+                    _ => Value::Null,
+                };
+                json!({"revenues": revenues, "extra_revenue": 0, "subsidy": 0})
+            } else {
+                json!({"type": t})
+            }
+        }
+    };
+
+    json!({
+        "v": super::KEY_VERSION,
+        "round": info["name"],
+        "turn": game.turn,
+        "round_num": info["num"],
+        "phase": game.phase.name,
+        "bank": game.bank.cash,
+        "acting": acting,
+        "entity": entity,
+        "step": step,
+        "actions": actions,
+        "priority": priority,
+        "players": players,
+        "corps": corps,
+        "companies": companies,
+        "depot": {"upcoming": upcoming, "discarded": discarded},
+        "hexes": hexes,
+        "finished": finished,
+        "result": result,
+        "manually_ended": finished && g.manually_ended,
+        "game_end_reason": g.end_reason(),
+        "last_action": last_action,
+    })
+}
+
+/// The raw action the position now follows: the last raw action processed (any type), None at the start.
+pub fn last_raw(g: &SiteGame) -> Option<&Value> {
+    // a refused action was counted (`pos` is past it) but not applied
+    let done = if g.stopped.is_some() { g.pos.saturating_sub(1) } else { g.pos };
+    if done == 0 {
+        None
+    } else {
+        g.raw.get(done - 1)
+    }
+}
+
+/// The key of the position now, after the last raw action processed.
+pub fn key_now(g: &mut SiteGame) -> Value {
+    let last = last_raw(g).cloned();
+    key(g, last.as_ref())
+}

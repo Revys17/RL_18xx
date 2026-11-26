@@ -55,7 +55,7 @@ pub fn city_id(g: &SiteGame, hex: &str, city: usize) -> String {
 }
 
 /// Ruby's step.actions(entity), ordered as Ruby lists them.
-fn ruby_types(g: &mut SiteGame) -> Vec<String> {
+pub fn ruby_types(g: &mut SiteGame) -> Vec<String> {
     let mut types = g.game.legal_action_types();
     let order = [
         "bid", "par", "buy_shares", "buy_company", "sell_shares", "lay_tile", "place_token", "run_routes", "dividend",
