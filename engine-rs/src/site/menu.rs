@@ -200,6 +200,15 @@ pub fn menu(g: &mut SiteGame, pid: u32) -> Value {
         match t.as_str() {
             "bid" => {
                 m.insert("auction".into(), auction(g, pid));
+                // Ruby WaterfallAuction: bids rise by at least $5, any amount above
+                m.insert("bidStep".into(), json!({"increment": 5, "multiple": false}));
+                if let Some(up) = g.game.auctioning_company() {
+                    let mut bidders: Vec<(i32, u32)> = g.game.auction_bids(&up).into_iter().map(|(p, price)| (price, p)).collect();
+                    bidders.sort_by(|a, b| b.0.cmp(&a.0));
+                    let list: Vec<Value> =
+                        bidders.iter().map(|(price, p)| json!({"id": p, "name": player_name(g, *p), "price": price})).collect();
+                    m.insert("auctioning".into(), json!({"sym": up, "name": company_name(g, &up), "bidders": list}));
+                }
             }
             "buy_shares" => {
                 m.insert("buy".into(), buy_options(g, pid));
@@ -319,6 +328,8 @@ fn pass_description(g: &SiteGame) -> Value {
     }
 }
 
+/// The waterfall auction's lots (living-board MoveMenu `auction`): while a company is being auctioned it is the only
+/// lot (the site's Ruby refuses bids on another private then: rl18xx-next 1b5c534, the auction lock).
 fn auction(g: &SiteGame, pid: u32) -> Value {
     let game = &g.game;
     let comps = game.auction_companies();
@@ -326,6 +337,7 @@ fn auction(g: &SiteGame, pid: u32) -> Value {
     let list: Vec<Value> = comps
         .iter()
         .enumerate()
+        .filter(|(_, sym)| auctioning.as_ref().map_or(true, |up| up == *sym))
         .map(|(i, sym)| {
             let value = game.companies.iter().find(|c| &c.sym == sym).map_or(0, |c| c.value);
             json!({"sym": sym, "name": company_name(g, sym), "value": value, "minBid": game.auction_min_bid(sym),
