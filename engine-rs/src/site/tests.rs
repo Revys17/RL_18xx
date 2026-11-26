@@ -16,8 +16,10 @@ fn fixture(name: &str) -> Value {
         // scratch-stack games of the step-1 verification (their players renamed), cut short: 18 to action 80, 17 to 246
         "programs_exchange_ca" => include_str!("../../site/fixtures/programs_exchange_ca.json"),
         "dh_teleport_no_route" => include_str!("../../site/fixtures/dh_teleport_no_route.json"),
-        // 1830 polish (§11.2): a scratch-stack game of the verification (15, whole, players renamed)
+        // 1830 polish (§11.2): a scratch-stack game of the verification (15, whole, players renamed), and :9301's bot
+        // game 44 (the bots renamed), where the bank breaks in OR 15.1
         "bankrupt_voluntary" => include_str!("../../site/fixtures/bankrupt_voluntary.json"),
+        "bank_broken" => include_str!("../../site/fixtures/bank_broken.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -309,4 +311,37 @@ fn voluntary_bankruptcy_is_offered_where_the_sites_hand_offers_it() {
     g.run_to(None);
     assert!(g.stopped.is_none(), "{:?}", g.stopped);
     assert_eq!(g.end_reason(), Some("bankrupt"));
+}
+
+#[test]
+fn the_snapshot_says_when_the_game_ends_as_ruby_does() {
+    // bank_broken (:9301's 44): the bank breaks at 794 in OR 15.1 of 3; :full_or, so the game ends after OR 15.3 (881)
+    let mut g = SiteGame::load(&fixture("bank_broken")).unwrap();
+    let snap_at = |g: &mut SiteGame, id: i64| {
+        g.run_to(Some(id));
+        super::view::snapshot(g, id)
+    };
+    assert_eq!(snap_at(&mut g, 793)["ending"], Value::Null);
+    // Opal's (adapter.ts endingOf over game_ending_description) at every position from 794 to 880
+    let want = json!({"text": "Bank Broken : Game Ends at conclusion of OR 15.3", "when": "after OR 15.3", "why": "bank broken"});
+    assert_eq!(snap_at(&mut g, 794)["ending"], want);
+    assert_eq!(snap_at(&mut g, 880)["ending"], want);
+    let last = snap_at(&mut g, 881);
+    assert_eq!((last["finished"].clone(), last["ending"].clone()), (json!(true), Value::Null));
+    // (every snapshot has the key: Opal's always does)
+    assert!(super::view::snapshot(&g, 881).as_object().unwrap().contains_key("ending"));
+}
+
+#[test]
+fn the_snapshot_names_the_company_up_for_auction() {
+    // 18@5: two bids on C&A while M&H is still first (no auction yet); 6: M&H bought, C&A goes up for auction (Ruby
+    // Auctioner#auctioning, adapter.ts auctionedNow); 7: C&A sold
+    let mut g = SiteGame::load(&fixture("programs_exchange_ca")).unwrap();
+    let mut at = |id: i64| {
+        g.run_to(Some(id));
+        super::view::snapshot(&g, id).get("auctioning").cloned()
+    };
+    assert_eq!(at(5), None);
+    assert_eq!(at(6), Some(json!("CA")));
+    assert_eq!(at(7), None);
 }

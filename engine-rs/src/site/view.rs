@@ -275,6 +275,7 @@ pub fn snapshot(g: &SiteGame, action_id: i64) -> Value {
 
     let mut bids = Vec::new();
     let mut auction = Vec::new();
+    let mut auctioning: Option<String> = None;
     if let Round::Auction(s) = &game.round {
         if s.pending_par.is_none() && !game.finished {
             for sym in game.auction_companies() {
@@ -287,6 +288,9 @@ pub fn snapshot(g: &SiteGame, action_id: i64) -> Value {
             for sym in game.auction_companies() {
                 auction.push(json!({"sym": sym, "minBid": game.auction_min_bid(&sym)}));
             }
+            // Ruby Auctioner#auctioning (WaterfallAuction#active_auction): the company resolve_bids_for_company put up
+            // for auction, while it has more than one bid (adapter.ts `auctionedNow`)
+            auctioning = game.auctioning_company().filter(|c| game.auction_bids(c).len() > 1);
         }
     }
 
@@ -331,14 +335,85 @@ pub fn snapshot(g: &SiteGame, action_id: i64) -> Value {
     );
     out.insert("bids".into(), Value::Array(bids));
     out.insert("auction".into(), Value::Array(auction));
+    // (absent when nothing is being auctioned, as adapter.ts leaves it out)
+    if let Some(c) = auctioning {
+        out.insert("auctioning".into(), json!(c));
+    }
     out.insert("finished".into(), json!(finished));
     out.insert("result".into(), result);
     out.insert("endReason".into(), end_reason);
+    out.insert("ending".into(), ending(g));
     out.insert("order".into(), json!(order_list));
     out.insert("orderIndex".into(), json!(order_index));
     out.insert("opOrder".into(), json!(op_order));
     out.insert("waiting".into(), json!(waiting));
     Value::Object(out)
+}
+
+/// Whether the game will end, and when: Ruby `Game#game_ending_description` as living-board's adapter.ts `endingOf`
+/// reads it into `Snapshot.ending` (the header's "Game ends after OR 7.3 (bank broken)"): `{when, why, text}`, `text`
+/// Ruby's line ("Bank Broken : Game Ends at conclusion of OR 7.3"), or null until an end is triggered and once the
+/// game is over (`endingOf` answers null for a finished game, whose line has no "Game Ends").
+///
+/// Ruby `game_end_check`: the latched triggers, the one whose timing comes first in GAME_END_TIMING_PRIORITY (as
+/// `BaseGame::should_end_now` resolves them); 1830's only one before the end is the broken bank (`:full_or`; a
+/// bankruptcy ends the game at once). The texts per timing are base.rb's; the final-phase trigger and `:current_or`
+/// (1867's) follow base.rb too, unchecked against 1867's Ruby until the site layer runs 1867.
+pub fn ending(g: &SiteGame) -> Value {
+    use crate::title::GameEndTiming as T;
+    let game = &g.game;
+    if game.finished {
+        return Value::Null;
+    }
+    let title = game.title_def();
+    let final_phase = title.final_phase_game_end() && title.phases().last().is_some_and(|p| p.name == game.phase.name);
+    let mut latched: Vec<(&str, T)> = Vec::new();
+    if final_phase {
+        // GAME_END_DESCRIPTION_REASON_MAP_TEXT[:final_phase]
+        latched.push(("Final phase was reached", T::OneMoreFullOrSet));
+    }
+    if game.bank_broken {
+        // GAME_END_DESCRIPTION_REASON_MAP_TEXT[:bank]
+        latched.push(("Bank Broken", title.bank_game_end_timing()));
+    }
+    let priority = title.game_end_timing_priority();
+    let Some((reason, timing)) =
+        latched.into_iter().min_by_key(|(_, t)| priority.iter().position(|p| p == t).unwrap_or(usize::MAX))
+    else {
+        return Value::Null;
+    };
+    let turn = game.turn;
+    // Ruby `round_end.short_name` (Round::Operating: "OR")
+    let (after, when) = match (&game.round, timing) {
+        (Round::Operating(s), T::CurrentOr) => {
+            (format!("this OR ({turn}.{})", s.round_num), format!("after OR {turn}.{}", s.round_num))
+        }
+        (r, T::CurrentOr) => (format!("the next OR ({turn}.{})", r.round_num()), "after the next OR".to_string()),
+        // `operating_rounds` (the OR set's count, fixed when it began) in an OR, else the phase's
+        (Round::Operating(s), T::FullOr) => (format!("OR {turn}.{}", s.total_ors), format!("after OR {turn}.{}", s.total_ors)),
+        (_, T::FullOr) => {
+            let n = game.phase.operating_rounds;
+            (format!("OR {turn}.{n}"), format!("after OR {turn}.{n}"))
+        }
+        (_, T::OneMoreFullOrSet) => {
+            // `@final_turn`.`final_operating_rounds` (the phase's count)
+            let ft = game.final_turn.unwrap_or(turn + 1);
+            let n = game.phase.operating_rounds;
+            (format!("OR {ft}.{n}"), format!("after OR {ft}.{n}"))
+        }
+    };
+    let text = format!("{reason} : Game Ends at conclusion of {after}");
+    // the reason in the line's own words, in lower case where Ruby capitalised each word ("Bank Broken": endingOf)
+    let why = reason
+        .split(' ')
+        .map(|w| {
+            let mut cs = w.chars();
+            let cap = cs.next().is_some_and(|c| c.is_ascii_uppercase()) && w.len() > 1 && cs.all(|c| c.is_ascii_lowercase());
+            if cap { w.to_lowercase() } else { w.to_string() }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    json!({"when": when, "why": why, "text": text})
 }
 
 /// The board's hexes: tile key, tokens per city slot, home reservations per city, blocking privates. City order as
