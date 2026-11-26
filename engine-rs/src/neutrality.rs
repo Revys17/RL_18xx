@@ -19,6 +19,9 @@
 //! set the crate builds with and needs no wheel. Nothing here may depend on hash-map iteration order: the legal
 //! indices are sorted, an index counts as a pass only if every entry behind it is one, the action log is serde_json
 //! (sorted keys) and the result is collected into a BTreeMap.
+//!
+//! 1867's twin (the policy gradient's 1867 engine: the generator layout `1867-v1`) is at the end of the file
+//! (docs/SITE_ENGINE_RS_1867.md §7).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -295,5 +298,193 @@ fn training_neutrality_1830_walks() {
 fn training_neutrality_walk_is_deterministic() {
     let a = walk(4, 7, Variant::RlRules, Pick::Busy, 600);
     let b = walk(4, 7, Variant::RlRules, Pick::Busy, 600);
+    assert_eq!((a.0, a.1), (b.0, b.1));
+}
+
+// =====================================================================================================================
+// 1867 (docs/SITE_ENGINE_RS_1867.md §7): the same guard for the 1867 policy gradient's engine, pinned BEFORE any 1867
+// site change (the first commit of branch site/engine-rs-1867, on site/engine-rs-1830 f6a9fe5, whose 1867 digests
+// equal RL_18xx origin/master cd97116's: checked on a `git archive` of each). Fixed-seed walks of 1867 through the
+// generator layout `1867-v1` exactly as the PG workers drive it (`rl_legal_moves_json` / `rl_apply_index`: the
+// legal-move generator under a cross-player policy, the index of each move, the price on the move's range, the
+// router's run, `process_action_internal`). Each walk hashes every position's legal moves (index, price range, pass),
+// the index and price chosen, the generic token encoder's output at every 5th position (`encode_tokens`, what the
+// model reads), the engine's action log (the wire dicts) and the result. Site work must leave every digest unchanged.
+// Re-pin only from RL_18xx master itself, for an intended change to 1867 there, and say so in the commit:
+//
+//   cargo test --release --no-default-features --features site neutrality_1867 -- --nocapture
+
+use crate::title::CrossPlayerPolicy;
+
+fn hash_encoding(h: &mut Fnv, g: &BaseGame) {
+    let e = g.encode_tokens();
+    h.i64(e.title_id as i64);
+    h.u64(e.num_hexes as u64);
+    h.u64(e.num_entities as u64);
+    for v in [&e.hex_feat, &e.ent_feat, &e.rel_val] {
+        h.u64(v.len() as u64);
+        for x in v.iter() {
+            h.u64(x.to_bits() as u64);
+        }
+    }
+    for v in [&e.hex_ptr, &e.hex_res, &e.hex_slot_city, &e.hex_ids, &e.ent_type, &e.ent_ptr, &e.ent_hex, &e.rel] {
+        h.u64(v.len() as u64);
+        for x in v.iter() {
+            h.i64(*x as i64);
+        }
+    }
+    for x in e.meta.iter() {
+        h.i64(*x as i64);
+    }
+    h.u64(e.truncated_slots as u64);
+}
+
+/// One 1867 walk: its digest, the number of moves applied, and where it ended (finished?, the phase).
+fn walk_1867(players: u32, seed: u64, policy: CrossPlayerPolicy, pick: Pick, max_moves: usize) -> (u64, usize, bool, String) {
+    let ids: Vec<u32> = (1..=players).collect();
+    let names: HashMap<u32, String> = ids.iter().map(|&i| (i, format!("Player {i}"))).collect();
+    let mut g = BaseGame::build_titled("1867", ids, names);
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut h = Fnv::new();
+    let mut moves = 0usize;
+    while moves < max_moves && !g.finished {
+        let legal = g.rl_indexed_moves(policy).unwrap_or_else(|e| panic!("{players}p seed {seed}: index API: {}", e.message));
+        if legal.is_empty() {
+            break;
+        }
+        h.u64(legal.len() as u64);
+        for m in &legal {
+            h.u64(m.index as u64);
+            h.u64(m.mv.action.action_type().len() as u64);
+            match m.mv.price {
+                Some(r) => {
+                    h.i64(r.lo as i64);
+                    h.i64(r.hi as i64);
+                    h.i64(r.step as i64);
+                }
+                None => h.i64(i64::MIN),
+            }
+            h.u64((m.mv.action.action_type() == "pass") as u64);
+        }
+        if moves % 5 == 0 {
+            hash_encoding(&mut h, &g);
+        }
+        let k = match pick {
+            Pick::Uniform => rng.gen_range(0..legal.len()),
+            Pick::Busy => {
+                let busy: Vec<usize> =
+                    (0..legal.len()).filter(|&i| legal[i].mv.action.action_type() != "pass").collect();
+                if !busy.is_empty() && rng.gen::<f64>() < 0.8 {
+                    busy[rng.gen_range(0..busy.len())]
+                } else {
+                    rng.gen_range(0..legal.len())
+                }
+            }
+        };
+        let idx = legal[k].index;
+        // a price on the move's range and step, as the PG sampler draws one
+        let price = legal[k].mv.price.map(|r| {
+            let n = ((r.hi - r.lo).max(0) / r.step.max(1)) as i64;
+            r.lo + (rng.gen_range(0..=n) as i32) * r.step.max(1)
+        });
+        h.u64(idx as u64);
+        h.i64(price.map_or(i64::MIN, |p| p as i64));
+        g.rl_apply_index(idx, price, policy).unwrap_or_else(|e| {
+            panic!("{players}p seed {seed}: index {idx} offered but refused: {}", e.message)
+        });
+        moves += 1;
+    }
+    h.u64(g.action_log.len() as u64);
+    for a in &g.action_log {
+        h.str(&serde_json::to_string(a).expect("action JSON"));
+    }
+    h.u64(g.finished as u64);
+    let result: BTreeMap<u32, i32> = g.calculate_results().into_iter().collect();
+    for (p, v) in result {
+        h.u64(p as u64);
+        h.i64(v as i64);
+    }
+    (h.0, moves, g.finished, g.phase.name.clone())
+}
+
+const MAX_MOVES_1867: usize = 3000;
+/// 24 walks: 3-6 players, the title's policy (self-play's) twice for each of Ruby's (the importer's matching set).
+const WALKS_1867: u64 = 24;
+
+fn cases_1867() -> Vec<(u32, u64, bool, Pick)> {
+    (0..WALKS_1867)
+        .map(|k| {
+            let players = 3 + (k % 4) as u32;
+            let rules = k % 3 == 2;
+            let pick = if k % 2 == 0 { Pick::Busy } else { Pick::Uniform };
+            (players, 1867 + k, rules, pick)
+        })
+        .collect()
+}
+
+/// (players, seed, rules policy?, pick, digest): pinned before any 1867 site change (the 1867 note above), on
+/// site/engine-rs-1830 f6a9fe5 = RL_18xx origin/master cd97116 for 1867.
+#[rustfmt::skip]
+const PINNED_1867: &[(u32, u64, bool, Pick, u64)] = {
+    use Pick::*;
+    &[
+        (3, 1867, false, Busy, 0x7db4f9779a9b08db), // 1101 moves, finished in phase 8
+        (4, 1868, false, Uniform, 0x376ce18523e651a8), // 1187 moves, finished in phase 8
+        (5, 1869, true, Busy, 0x6887c359d4626858), // 2099 moves, finished in phase 8
+        (6, 1870, false, Uniform, 0xd56b0baa95c19e11), // 1596 moves, finished in phase 8
+        (3, 1871, false, Busy, 0x1f7a57bf6e45093d), // 1126 moves, finished in phase 8
+        (4, 1872, true, Uniform, 0xdaa5b31860f9394b), // 1477 moves, finished in phase 8
+        (5, 1873, false, Busy, 0x4837b8b9e063061d), // 1093 moves, finished in phase 8
+        (6, 1874, false, Uniform, 0x728db9de668b1221), // 1469 moves, finished in phase 8
+        (3, 1875, true, Busy, 0xae71d5b0433eefa2), // 1303 moves, finished in phase 8
+        (4, 1876, false, Uniform, 0x0e079ef1c44fa84e), // 1124 moves, finished in phase 8
+        (5, 1877, false, Busy, 0xc95c5f94cb505817), // 1213 moves, finished in phase 8
+        (6, 1878, true, Uniform, 0x180b7add8fdcc5b3), // 1491 moves, finished in phase 8
+        (3, 1879, false, Busy, 0xcd655fe7d16ec0a2), // 1013 moves, finished in phase 8
+        (4, 1880, false, Uniform, 0xb32b9e275eba6be5), // 1339 moves, finished in phase 8
+        (5, 1881, true, Busy, 0xda4aeff83553765e), // 1583 moves, finished in phase 8
+        (6, 1882, false, Uniform, 0xbe618483e1a2379c), // 1216 moves, finished in phase 8
+        (3, 1883, false, Busy, 0xe4ff25dfa295daed), // 938 moves, finished in phase 8
+        (4, 1884, true, Uniform, 0x44fea0494724e0dc), // 1588 moves, finished in phase 8
+        (5, 1885, false, Busy, 0x3da3efa405e71b1a), // 1191 moves, finished in phase 8
+        (6, 1886, false, Uniform, 0xb13b31b73276163c), // 1526 moves, finished in phase 8
+        (3, 1887, true, Busy, 0xe9bc439861f4544d), // 1327 moves, finished in phase 8
+        (4, 1888, false, Uniform, 0x22d23815933efc22), // 1073 moves, finished in phase 8
+        (5, 1889, false, Busy, 0xef94e199cbaf37c3), // 1163 moves, finished in phase 8
+        (6, 1890, true, Uniform, 0x93b4a1efcd8b4707), // 1814 moves, finished in phase 8
+    ]
+};
+
+#[test]
+fn training_neutrality_1867_walks() {
+    let mut got = Vec::new();
+    let (mut total, mut ended) = (0, 0);
+    for (players, seed, rules, pick) in cases_1867() {
+        let policy = if rules { CrossPlayerPolicy::RULES } else { CrossPlayerPolicy::RESTRICTED };
+        let (digest, n, finished, phase) = walk_1867(players, seed, policy, pick, MAX_MOVES_1867);
+        total += n;
+        ended += finished as usize;
+        let end = if finished { "finished" } else { "stopped" };
+        eprintln!("    ({players}, {seed}, {rules}, {pick:?}, 0x{digest:016x}), // {n} moves, {end} in phase {phase}");
+        got.push((players, seed, rules, pick, digest));
+    }
+    eprintln!("training neutrality 1867: {} walks, {total} moves, {ended} finished", got.len());
+    assert_eq!(got.len(), PINNED_1867.len(), "the pinned 1867 list and the cases differ: re-pin from master (module doc)");
+    for (g, p) in got.iter().zip(PINNED_1867) {
+        assert_eq!((g.0, g.1, g.2), (p.0, p.1, p.2), "the pinned 1867 list's order changed");
+        assert_eq!(
+            g.4, p.4,
+            "1867 self-play changed: {}p seed {} rules {} {:?}. With site_rules off the RL engine must be byte-identical \
+             to master (docs/SITE_ENGINE_RS_1867.md §7)",
+            g.0, g.1, g.2, g.3
+        );
+    }
+}
+
+/// The same 1867 walk twice gives the same digest (no hash-map order in the generator, the router or the encoder).
+#[test]
+fn training_neutrality_1867_walk_is_deterministic() {
+    let a = walk_1867(4, 7, CrossPlayerPolicy::RESTRICTED, Pick::Busy, 400);
+    let b = walk_1867(4, 7, CrossPlayerPolicy::RESTRICTED, Pick::Busy, 400);
     assert_eq!((a.0, a.1), (b.0, b.1));
 }
