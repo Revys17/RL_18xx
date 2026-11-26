@@ -156,7 +156,7 @@ def test_an_encode_task_returns_positions_with_their_games_outcomes(generated):
     for i, g in enumerate(games):
         rows = out["game"] == 100 + i
         pos = vt.game_positions(g.meta, g.actions, 3, 7)
-        if pos is None:  # a game with no position to keep: the task returns none of its rows either
+        if pos["game_states"] is None:  # a game with no position to keep: the task returns none of its rows either
             assert not rows.any()
             continue
         assert np.array_equal(out["game_states"][rows], pos["game_states"])
@@ -363,7 +363,8 @@ def test_a_tiny_cycle_end_to_end(tmp_path, generated, init_checkpoint, fixed_dir
     data = tmp_path / "data"
     shutil.copytree(generated["data"], data)  # new shards arrive below
     cfg = _trainer_config(tmp_path, generated, init_checkpoint, fixed_dir, data=[str(data)], workers=1, epochs=2.0,
-                          cycle_games=1, patience=100, buffer_positions=16,  # two passes through a small buffer
+                          cycle_games=1, patience=100, max_steps=0,  # both passes in full, whatever the sample's size
+                          buffer_positions=16,  # two passes through a small buffer
                           diverge_ce=10.0)  # a tiny net at lr 1e-3 on a few dozen held-out positions: noise, not a test
     trainer = vt.ValueTrainer(cfg)
     run = tmp_path / "run"
