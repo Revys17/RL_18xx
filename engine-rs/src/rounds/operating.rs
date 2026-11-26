@@ -1276,7 +1276,10 @@ impl BaseGame {
             // other_trains(entity): other-corp trains. 1830 restricts to
             // sellers with the SAME president (ALLOW_TRAIN_BUY_FROM_OTHER_
             // PLAYERS == false); 1867 trades trains between any corps.
-            let cross_president = self.title_def().train_buy_from_other_players();
+            // site_rules: Ruby's Engine::Depot#other_trains(corporation)
+            // with ALLOW_TRAIN_BUY_FROM_OTHER_PLAYERS = true (base; 1830
+            // keeps it), accepted by Engine::Step::BuyTrain#process_buy_train.
+            let cross_president = self.title_def().train_buy_from_other_players() || self.site_rules;
             let buyer_pres = self.corporations[corp_idx].president_id();
             for other in &self.corporations {
                 if other.sym == corp_sym {
