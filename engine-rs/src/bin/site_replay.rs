@@ -3,6 +3,7 @@
 //!
 //! cargo run --release --no-default-features --features site --bin site_replay -- [<corpus dir or game .json>...]
 //!     [--report <json>] [--views] [--goldens <dir>] [--verbose] [--digest]
+//!     [--acts <cases.jsonl> [--acts-every N] [--acts-tiles N]]   (§8.3, K11)
 //!
 //! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
 //! the Opal goldens (B's `test/rust/golden.cjs`) where they exist.
@@ -40,6 +41,9 @@ fn main() {
     let mut goldens: Option<String> = None;
     let mut views = false;
     let mut digest = false;
+    let mut acts: Option<String> = None;
+    let mut acts_every = 10usize;
+    let mut acts_tiles = 5usize;
     let mut verbose = false;
     let mut i = 0;
     while i < argv.len() {
@@ -54,6 +58,18 @@ fn main() {
             }
             "--views" => views = true,
             "--digest" => digest = true,
+            "--acts" => {
+                acts = argv.get(i + 1).cloned();
+                i += 1;
+            }
+            "--acts-every" => {
+                acts_every = argv.get(i + 1).and_then(|x| x.parse().ok()).unwrap_or(10);
+                i += 1;
+            }
+            "--acts-tiles" => {
+                acts_tiles = argv.get(i + 1).and_then(|x| x.parse().ok()).unwrap_or(5);
+                i += 1;
+            }
             "--verbose" => verbose = true,
             a => inputs.push(a.to_string()),
         }
@@ -65,6 +81,52 @@ fn main() {
         }));
     }
     let files = corpus_files(&inputs);
+    // --acts <cases.jsonl>: the act-level cases of §8.3 (K11) of the distinct games
+    if let Some(path) = acts {
+        use std::io::Write;
+        let mut f = std::io::BufWriter::new(std::fs::File::create(&path).expect("cases file"));
+        let sampling = engine_rs::site::acts::Sampling { every: acts_every, tile_every: acts_tiles };
+        let mut seen = std::collections::HashSet::new();
+        let (mut games_n, mut cases_n, mut dup) = (0usize, 0usize, 0usize);
+        let mut verdicts: BTreeMap<String, usize> = BTreeMap::new();
+        for path in &files {
+            let Ok(text) = std::fs::read_to_string(path) else { continue };
+            let Ok(data) = serde_json::from_str::<Value>(&text) else { continue };
+            if data.get("title").and_then(Value::as_str) != Some("1830") {
+                continue;
+            }
+            // distinct games: the players, rules and action stream (ids, users and times aside)
+            let mut stream = data.get("actions").cloned().unwrap_or(json!([]));
+            if let Some(xs) = stream.as_array_mut() {
+                for a in xs.iter_mut() {
+                    if let Some(m) = a.as_object_mut() {
+                        for k in ["id", "user", "created_at"] {
+                            m.remove(k);
+                        }
+                    }
+                }
+            }
+            let sig = json!([data.get("players").map(|ps| ps.as_array().map(|v| v.iter().map(|p| p["id"].clone()).collect::<Vec<_>>())), data.pointer("/settings/optional_rules"), stream]).to_string();
+            if !seen.insert(sig) {
+                dup += 1;
+                continue;
+            }
+            let gid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+            let mut emit = |v: Value| {
+                *verdicts.entry(v["rust"]["verdict"].as_str().unwrap_or("?").to_string()).or_default() += 1;
+                writeln!(f, "{v}").unwrap();
+            };
+            match engine_rs::site::acts::game_cases(&data, &gid, &sampling, &mut emit) {
+                Ok(n) => {
+                    games_n += 1;
+                    cases_n += n;
+                }
+                Err(e) => eprintln!("{gid}: {e}"),
+            }
+        }
+        println!("acts: {games_n} distinct games ({dup} duplicates), {cases_n} cases {verdicts:?} -> {path}");
+        return;
+    }
     // --digest: each game's replay digest (§8.2 native vs wasm; scripts/site_engine/pkg_smoke.cjs --digest)
     if digest {
         for path in &files {

@@ -26,6 +26,8 @@ pub mod shadow;
 pub mod cli;
 #[cfg(feature = "site")]
 pub mod compare;
+#[cfg(feature = "site")]
+pub mod acts;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
