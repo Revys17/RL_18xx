@@ -1985,7 +1985,7 @@ impl BaseGame {
     /// moving its share price left one step per loan and returning the
     /// loans to the pool — so a FINISHED game's `result()` needs no
     /// virtual loan adjustment. Inert for 1830 (loans are always 0).
-    fn end_game(&mut self) {
+    pub(crate) fn end_game(&mut self) {
         if self.finished {
             return; // Ruby end_game!: `return if @finished`
         }
@@ -3296,7 +3296,7 @@ impl BaseGame {
     }
 
     /// Returns the currently active player(s).
-    fn active_players(&self) -> Vec<Player> {
+    pub(crate) fn active_players(&self) -> Vec<Player> {
         let active_id = &self.round_state.active_entity_id.0;
         self.players
             .iter()
@@ -3310,7 +3310,7 @@ impl BaseGame {
     /// - Stock round: reads from stock state (updated per-action)
     /// - Auction round: computes from recent_actions (last bidder + 1)
     /// - OR: uses game-level field
-    fn priority_deal_player_py(&self) -> Player {
+    pub(crate) fn priority_deal_player_py(&self) -> Player {
         let pd_id = match &self.round {
             Round::Stock(s) => s.priority_deal_player,
             Round::Auction(s) => {
@@ -3331,13 +3331,13 @@ impl BaseGame {
     }
 
     /// Count certificates owned by a player (shares + companies).
-    fn num_certs(&self, player_id: u32) -> u32 {
+    pub(crate) fn num_certs(&self, player_id: u32) -> u32 {
         self.num_certs_internal(player_id)
     }
 
     /// Get the certificate limit for this game.
     #[getter]
-    fn cert_limit_py(&self) -> u8 {
+    pub(crate) fn cert_limit_py(&self) -> u8 {
         self.cert_limit
     }
 
@@ -3434,7 +3434,7 @@ impl BaseGame {
     }
 
     /// Get tokenable cities for a corporation: list of (hex_id, city_index).
-    fn get_tokenable_cities(&mut self, corp_sym: String) -> Vec<(String, usize)> {
+    pub(crate) fn get_tokenable_cities(&mut self, corp_sym: String) -> Vec<(String, usize)> {
         self.tokenable_cities_for(&corp_sym)
     }
 
@@ -3444,13 +3444,13 @@ impl BaseGame {
     /// per-round step lists + the ONE shared `actions_for` accumulation loop.
     /// The historical hand-derived dispatch survives only as the test-only
     /// differential oracle (`legacy_legal_action_types_oracle`, end of file).
-    fn legal_action_types(&mut self) -> Vec<String> {
+    pub(crate) fn legal_action_types(&mut self) -> Vec<String> {
         self.step_action_types_impl()
     }
 
     /// The currently active entity's ID string (e.g., "player:1", "corp:PRR").
     #[getter]
-    fn current_entity_id(&self) -> String {
+    pub(crate) fn current_entity_id(&self) -> String {
         self.round_state.active_entity_id.0.clone()
     }
 
@@ -3558,7 +3558,7 @@ impl BaseGame {
 
     /// Get all valid tile upgrades for a hex.
     /// Returns list of (tile_name, rotation) tuples for tiles that can be placed.
-    fn upgradeable_tiles_for(&self, hex_id: &str) -> Vec<(String, u8)> {
+    pub(crate) fn upgradeable_tiles_for(&self, hex_id: &str) -> Vec<(String, u8)> {
         let hi = match self.hex_idx.get(hex_id) {
             Some(&i) => i,
             None => return Vec::new(),
@@ -3746,7 +3746,7 @@ impl BaseGame {
 
     /// Get legal rotations for a specific tile on a hex.
     /// Returns list of rotation values (0-5).
-    fn legal_tile_rotations(&self, hex_id: &str, tile_name: &str) -> Vec<u32> {
+    pub(crate) fn legal_tile_rotations(&self, hex_id: &str, tile_name: &str) -> Vec<u32> {
         let hi = match self.hex_idx.get(hex_id) {
             Some(&i) => i,
             None => return Vec::new(),
@@ -3784,7 +3784,7 @@ impl BaseGame {
     /// Buyable trains for a corporation.
     /// Returns list of (train_id, train_name, price, source) tuples.
     /// source is "depot", "discard", or corp_sym (for inter-corp purchases).
-    fn buyable_trains_for(&self, corp_sym: &str) -> Vec<(String, String, i32, String)> {
+    pub(crate) fn buyable_trains_for(&self, corp_sym: &str) -> Vec<(String, String, i32, String)> {
         let ci = match self.corp_idx.get(corp_sym) {
             Some(&i) => i,
             None => return Vec::new(),
@@ -3899,7 +3899,7 @@ impl BaseGame {
     /// Python's `must_buy_train` keys off `depot.depot_trains()` (visible upcoming
     /// PLUS the discarded pool) being non-empty — not just the upcoming queue, so
     /// a discarded train still triggers the obligation after the queue empties.
-    fn president_may_contribute(&mut self, corp_sym: &str) -> bool {
+    pub(crate) fn president_may_contribute(&mut self, corp_sym: &str) -> bool {
         let ci = match self.corp_idx.get(corp_sym) {
             Some(&i) => i,
             None => return false,
@@ -3913,7 +3913,7 @@ impl BaseGame {
 
     /// Dividend options for a corporation: returns list of option names.
     /// In 1830: ["payout", "withhold"] always (for the dividend step).
-    fn dividend_options(&self, _corp_sym: &str) -> Vec<String> {
+    pub(crate) fn dividend_options(&self, _corp_sym: &str) -> Vec<String> {
         vec!["payout".to_string(), "withhold".to_string()]
     }
 
@@ -3922,7 +3922,7 @@ impl BaseGame {
     /// Active step type as string: "WaterfallAuction", "BuySellPar", "LayTile",
     /// "PlaceToken", "RunRoutes", "Dividend", "BuyTrain", "BuyCompany",
     /// "DiscardTrain", "CompanyPendingPar", "Done".
-    fn active_step_type(&self) -> String {
+    pub(crate) fn active_step_type(&self) -> String {
         match &self.round {
             Round::Auction(s) => {
                 if s.pending_par.is_some() {
@@ -3953,12 +3953,12 @@ impl BaseGame {
     /// teleport tile is laid and before the teleport token is placed/declined.
     /// Used by the adapter to gate the DH `PlaceToken` (SpecialToken) offer
     /// instead of the permanent `DH.ability_used` flag.
-    fn teleport_pending(&self) -> bool {
+    pub(crate) fn teleport_pending(&self) -> bool {
         matches!(&self.round, Round::Operating(s) if s.teleport_pending)
     }
 
     /// Auction: company currently being auctioned (sym), or None.
-    fn auctioning_company(&self) -> Option<String> {
+    pub(crate) fn auctioning_company(&self) -> Option<String> {
         match &self.round {
             Round::Auction(s) => s
                 .auctioning
@@ -3969,7 +3969,7 @@ impl BaseGame {
     }
 
     /// Auction: remaining companies in order (cheapest first), as sym list.
-    fn auction_companies(&self) -> Vec<String> {
+    pub(crate) fn auction_companies(&self) -> Vec<String> {
         match &self.round {
             Round::Auction(s) => s
                 .remaining_companies
@@ -3982,7 +3982,7 @@ impl BaseGame {
     }
 
     /// Auction: bids on a company as list of (player_id, price).
-    fn auction_bids(&self, company_sym: &str) -> Vec<(u32, i32)> {
+    pub(crate) fn auction_bids(&self, company_sym: &str) -> Vec<(u32, i32)> {
         match &self.round {
             Round::Auction(s) => {
                 let ci = self.companies.iter().position(|c| c.sym == company_sym);
@@ -3995,7 +3995,7 @@ impl BaseGame {
     }
 
     /// Auction: minimum bid for a company.
-    fn auction_min_bid(&self, company_sym: &str) -> i32 {
+    pub(crate) fn auction_min_bid(&self, company_sym: &str) -> i32 {
         match &self.round {
             Round::Auction(s) => {
                 let ci = self
@@ -4011,7 +4011,7 @@ impl BaseGame {
     }
 
     /// Auction: maximum bid for a player on a company.
-    fn auction_max_bid(&self, player_id: u32, company_sym: &str) -> i32 {
+    pub(crate) fn auction_max_bid(&self, player_id: u32, company_sym: &str) -> i32 {
         match &self.round {
             Round::Auction(s) => {
                 let ci = self
@@ -4031,7 +4031,7 @@ impl BaseGame {
     }
 
     /// Auction: pending par info as (corp_sym, player_id), or None.
-    fn auction_pending_par(&self) -> Option<(String, u32)> {
+    pub(crate) fn auction_pending_par(&self) -> Option<(String, u32)> {
         match &self.round {
             Round::Auction(s) => s.pending_par.clone(),
             _ => None,
@@ -4039,7 +4039,7 @@ impl BaseGame {
     }
 
     /// Operating: current step name as string.
-    fn operating_step(&self) -> String {
+    pub(crate) fn operating_step(&self) -> String {
         match &self.round {
             Round::Operating(s) => format!("{:?}", s.step),
             _ => String::new(),
@@ -4047,7 +4047,7 @@ impl BaseGame {
     }
 
     /// Stock: corps sold by this player this round (sym list).
-    fn stock_sold_corps(&self, player_id: u32) -> Vec<String> {
+    pub(crate) fn stock_sold_corps(&self, player_id: u32) -> Vec<String> {
         match &self.round {
             Round::Stock(s) => s
                 .players_sold
@@ -4059,7 +4059,7 @@ impl BaseGame {
     }
 
     /// Stock: whether current player has bought a share this turn.
-    fn stock_bought_this_turn(&self) -> bool {
+    pub(crate) fn stock_bought_this_turn(&self) -> bool {
         match &self.round {
             Round::Stock(s) => s.bought_this_turn,
             _ => false,
@@ -4067,7 +4067,7 @@ impl BaseGame {
     }
 
     /// Stock: whether current player has bought from IPO this turn.
-    fn stock_bought_from_ipo(&self) -> bool {
+    pub(crate) fn stock_bought_from_ipo(&self) -> bool {
         match &self.round {
             Round::Stock(s) => s.bought_from_ipo,
             _ => false,
@@ -4080,7 +4080,7 @@ impl BaseGame {
     /// pool (``from_market``) or the IPO. Used by the cleaning pipeline's
     /// ``can_buy_shares`` mirror. False outside a stock round or for an
     /// unknown corporation.
-    fn stock_can_buy_more(&self, corp_sym: &str, from_market: bool) -> bool {
+    pub(crate) fn stock_can_buy_more(&self, corp_sym: &str, from_market: bool) -> bool {
         match (&self.round, self.corp_idx.get(corp_sym)) {
             (Round::Stock(s), Some(&ci)) => self.stock_can_buy_multiple(s, &self.corporations[ci], from_market),
             _ => false,
@@ -4088,7 +4088,7 @@ impl BaseGame {
     }
 
     /// Stock: corp symbol the current player bought this turn, if any.
-    fn stock_bought_corp_this_turn(&self) -> Option<String> {
+    pub(crate) fn stock_bought_corp_this_turn(&self) -> Option<String> {
         match &self.round {
             Round::Stock(s) => s.bought_corp_this_turn.clone(),
             _ => None,
@@ -4127,7 +4127,7 @@ impl BaseGame {
     /// Returns list of (corp_sym, source_type, share_index, price) tuples.
     /// source_type is "ipo" or "market". share_index is the position in corp.shares.
     /// Only the lowest-index buyable share per (corp, source) group is returned.
-    fn buyable_shares(&self, player_id: u32) -> Vec<(String, String, usize, i32)> {
+    pub(crate) fn buyable_shares(&self, player_id: u32) -> Vec<(String, String, usize, i32)> {
         let stock_state = match &self.round {
             Round::Stock(s) => s,
             _ => return Vec::new(),
@@ -4246,7 +4246,7 @@ impl BaseGame {
     /// Python's `sellable_bundle` (`can_dump` + `fit_in_bank`); for non-operating
     /// corps `EBUY_PRES_SWAP=True` makes the presidency swap permissible, which
     /// the president-dump check (another player can take over) already models.
-    fn sellable_bundles(&self, player_id: u32) -> Vec<(String, usize, u8)> {
+    pub(crate) fn sellable_bundles(&self, player_id: u32) -> Vec<(String, usize, u8)> {
         self.sellable_bundles_detailed(player_id)
             .into_iter()
             .map(|b| (b.corp_sym, b.num_shares, b.percent))
@@ -4560,7 +4560,7 @@ impl BaseGame {
     }
 
     /// Par prices with coordinates: returns [(price, row, col), ...].
-    fn par_prices_with_coords(&self) -> Vec<(i32, usize, usize)> {
+    pub(crate) fn par_prices_with_coords(&self) -> Vec<(i32, usize, usize)> {
         let mut result = Vec::new();
         for (row_idx, row) in self.stock_market.grid.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
@@ -4592,7 +4592,7 @@ impl BaseGame {
     // -- Phase 4: Connectivity, Tile, Token, Routing --
 
     /// Get reachable hexes for a corporation: hex_id -> list of connected edges.
-    fn connected_hexes(&mut self, corp_sym: &str) -> HashMap<String, Vec<u8>> {
+    pub(crate) fn connected_hexes(&mut self, corp_sym: &str) -> HashMap<String, Vec<u8>> {
         let token_positions = self.corp_token_positions(corp_sym);
         let reservations = self.home_reservations();
         let graph = self.graph_cache.get_or_compute(
@@ -4703,7 +4703,7 @@ impl BaseGame {
     /// Whether the corp must buy a train: no trains, depot has trains, and
     /// 2+ mandatory (city) nodes reachable. Matches Python's must_buy_train
     /// which checks graph.route_info(entity)["route_train_purchase"].
-    fn must_buy_train(&mut self, corp_sym: &str) -> bool {
+    pub(crate) fn must_buy_train(&mut self, corp_sym: &str) -> bool {
         let token_positions = self.corp_token_positions(corp_sym);
         let reservations = self.home_reservations();
         let graph = self.graph_cache.get_or_compute(
