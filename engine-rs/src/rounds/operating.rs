@@ -2859,7 +2859,12 @@ impl BaseGame {
 
                         // Can buy inter-corp? 1830: same president only;
                         // 1867: any corp's trains are buyable (from $1).
-                        let cross = self.title_def().train_buy_from_other_players();
+                        // site_rules: Ruby's step stays open while any other
+                        // corporation holds a train (Engine::Step::BuyTrain#actions
+                        // -> Engine::Step::Train#can_buy_train? -> buyable_trains,
+                        // incl. @depot.other_trains(entity)); the legal-move list
+                        // keeps the RL rule (only pass there).
+                        let cross = self.title_def().train_buy_from_other_players() || self.site_rules;
                         let pres_id = self.corporations[corp_idx].president_id();
                         let can_buy_inter_corp = corp_cash > 0
                             && self.corporations.iter().any(|other| {
