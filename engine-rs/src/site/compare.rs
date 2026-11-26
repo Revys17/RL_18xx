@@ -29,6 +29,8 @@ pub struct Stats {
     pub routes_rust_lower: usize,
     pub routes_recorded_higher: usize,
     pub misaligned: usize,
+    pub static_infos: usize,
+    pub static_infos_equal: usize,
     /// field path -> (count, first example)
     pub diffs: BTreeMap<String, (usize, String)>,
     pub log_diffs: BTreeMap<String, (usize, String)>,
@@ -79,6 +81,7 @@ impl Stats {
             "tileOptions": self.tile_opts, "tileOptionsEqual": self.tile_opts_equal, "routes": self.routes, "routesEqual": self.routes_equal,
             "routesRustHigher": self.routes_rust_higher, "routesRustLower": self.routes_rust_lower, "recordedAboveRust": self.routes_recorded_higher, "logSteps": self.log_steps, "logStepsEqual": self.log_steps_equal,
             "logLines": self.log_lines, "logLinesEqual": self.log_lines_equal, "misaligned": self.misaligned,
+            "staticInfos": self.static_infos, "staticInfosEqual": self.static_infos_equal,
             "diffs": m(&self.diffs), "logDiffs": m(&self.log_diffs),
         })
     }
@@ -291,6 +294,27 @@ impl<'a> GameCompare<'a> {
     pub fn start(&mut self, g: &mut SiteGame, stats: &mut Stats) {
         stats.games += 1;
         let gid = self.golden.get("gid").map(|v| v.to_string()).unwrap_or_default();
+        // StaticInfo: the engine's part (the pack's names, colours and texts aside)
+        if let Some(info) = self.golden.get("info") {
+            let mine = super::view::static_info(g);
+            let mut diffs = Vec::new();
+            for k in ["market", "trainTypes", "phases", "bankStart", "certLimit"] {
+                diff(&format!("info.{k}"), &mine[k], &info[k], &mut diffs);
+            }
+            let pick = |v: &Value, keys: &[&str]| -> Value {
+                json!(v.as_array().map(|xs| xs.iter().map(|x| keys.iter().map(|k| (k.to_string(), x[*k].clone())).collect::<Map<String, Value>>()).collect::<Vec<_>>()))
+            };
+            diff("info.companies", &pick(&mine["companies"], &["sym", "value", "revenue", "blocks", "comesWith"]),
+                 &pick(&info["companies"], &["sym", "value", "revenue", "blocks", "comesWith"]), &mut diffs);
+            diff("info.players", &pick(&mine["players"], &["id", "name"]), &pick(&info["players"], &["id", "name"]), &mut diffs);
+            stats.static_infos += 1;
+            if diffs.is_empty() {
+                stats.static_infos_equal += 1;
+            }
+            for (path, ex) in diffs {
+                Stats::note(&mut stats.diffs, normalize(&path), format!("{gid}: {ex}"));
+            }
+        }
         if let Some(s0) = self.steps.first().copied() {
             let snap = super::view::snapshot(g, 0);
             let log = g.start_log.clone();

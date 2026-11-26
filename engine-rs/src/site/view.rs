@@ -632,14 +632,17 @@ pub fn static_info(g: &SiteGame) -> Value {
         .iter()
         .map(|c| {
             let blocks: Vec<&str> = crate::abilities::blocks_hexes(&game.title, c.sym).map(|(_, h)| h.to_vec()).unwrap_or_default();
-            let comes: Vec<Value> = match crate::abilities::share_grant(&game.title, c.sym) {
-                Some(share) => {
-                    let (corp, idx) = share.rsplit_once('_').unwrap_or((share, "1"));
-                    let president = idx == "0";
-                    vec![json!({"corp": corp, "pct": if president { 20 } else { 10 }, "president": president})]
-                }
-                None => vec![],
-            };
+            // the shares a private comes with (Ruby's `shares` ability): B&O's president's 20%, C&A's 10% of PRR
+            let comes: Vec<Value> = crate::abilities::company_abilities(&game.title, c.sym)
+                .iter()
+                .filter_map(|a| match a {
+                    crate::title::AbilityDef::Shares { corporation, share_index, .. } => {
+                        let president = *share_index == 0;
+                        Some(json!({"corp": corporation, "pct": if president { 20 } else { 10 }, "president": president}))
+                    }
+                    _ => None,
+                })
+                .collect();
             json!({"sym": c.sym, "name": c.name, "value": c.value, "revenue": c.revenue, "blocks": blocks, "comesWith": comes})
         })
         .collect();
@@ -647,13 +650,16 @@ pub fn static_info(g: &SiteGame) -> Value {
         .stock_market
         .grid
         .iter()
-        .map(|row| json!(row.iter().map(|c| c.as_ref().map_or(Value::Null, |c| json!({"price": c.price, "types": c.types}))).collect::<Vec<_>>()))
+        // Ruby's cell types ("normal" is the engine's word for none)
+        .map(|row| json!(row.iter().map(|c| c.as_ref().map_or(Value::Null, |c| json!({"price": c.price,
+            "types": c.types.iter().filter(|t| t.as_str() != "normal").collect::<Vec<_>>()}))).collect::<Vec<_>>()))
         .collect();
     let trains: Vec<Value> = title
         .trains()
         .iter()
         .map(|t| {
-            let num = title.num_trains(t, &game.optional_rules);
+            // an unlimited train (1830's D) is one at a time in Ruby's depot (clone_unlimited): Opal says 1
+            let num = if t.name == "D" { 1 } else { title.num_trains(t, &game.optional_rules) };
             json!({"name": t.name, "distance": if t.name == "D" { json!(999) } else { json!(t.distance) }, "price": t.price,
                    "rustsOn": t.rusts_on, "num": num, "unlimited": t.name == "D"})
         })
@@ -677,7 +683,8 @@ pub fn static_info(g: &SiteGame) -> Value {
         "hexes": hexes,
         "trainTypes": trains,
         "phases": phases,
-        "bankStart": title.bank_cash(),
+        // the bank once the players have their starting cash (Opal: the bank's cash at the start)
+        "bankStart": title.bank_cash() - g.players.len() as i32 * title.starting_cash(g.players.len() as u8),
         "certLimit": game.cert_limit,
         "currency": "$%s",
         "packKeys": ["corporations.name", "corporations.color", "corporations.textColor", "corporations.logo",
