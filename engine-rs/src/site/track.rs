@@ -164,3 +164,18 @@ pub fn route_track(g: &SiteGame, route: &Value) -> Option<Value> {
     }
     Some(json!({"stops": stops, "legs": legs}))
 }
+
+/// Ruby `Route#visited_hexes` (rl18xx-next c57803b): the hexes of the route's stops in the order the train reaches
+/// them, one per stop (both cities of an OO hex: the hex twice), from the track, "-"-joined.
+pub fn visited_hexes(g: &SiteGame, route: &Value) -> Option<String> {
+    let t = route_track(g, route)?;
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for s in t.get("stops")?.as_array()? {
+        let node = (s.get("hex")?.as_str()?.to_string(), s.get("end")?.to_string());
+        // `.uniq` over the nodes: a stop reached again isn't listed again
+        if !seen.contains(&node) {
+            seen.push(node);
+        }
+    }
+    Some(seen.into_iter().map(|n| n.0).collect::<Vec<_>>().join("-"))
+}

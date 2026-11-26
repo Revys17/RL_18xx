@@ -74,18 +74,22 @@ fn price_moves(b: &BaseGame, a: &BaseGame, only: Option<&str>, out: &mut Vec<Str
         if (p0.1, p0.2) == (p1.1, p1.2) {
             continue;
         }
-        let dir = if p1.2 > p0.2 {
-            "right"
-        } else if p1.2 < p0.2 {
-            "left"
-        } else if p1.1 < p0.1 {
-            "up"
-        } else {
-            "down"
-        };
-        if p0.0 != p1.0 {
-            out.push(format!("{}'s share price moves {dir} from ${} to ${}", c.sym, p0.0, p1.0));
+        // Ruby log_share_price: any move to another cell, the same price included ("from $67 to $67"), its
+        // directions up/down then left/right
+        let mut dirs = Vec::new();
+        if p1.1 < p0.1 {
+            dirs.push("up");
         }
+        if p1.1 > p0.1 {
+            dirs.push("down");
+        }
+        if p1.2 < p0.2 {
+            dirs.push("left");
+        }
+        if p1.2 > p0.2 {
+            dirs.push("right");
+        }
+        out.push(format!("{}'s share price moves {} from ${} to ${}", c.sym, dirs.join(" and "), p0.0, p1.0));
     }
 }
 
@@ -199,7 +203,11 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
     let who = pid.map(|p| pname(a, p)).unwrap_or_else(|| ent.clone());
     // the acting player (a corporation's president) and Ruby's "via Master Mode" line
     let acting = pid.or_else(|| bg.corp_idx.get(ent.as_str()).and_then(|&i| bg.corporations[i].president_id()))
-        .or_else(|| bg.company_idx.get(ent.as_str()).and_then(|&i| bg.companies[i].owner.player_id()));
+        .or_else(|| {
+            // a company: its owner, or its owning corporation's president
+            let owner = &bg.companies[*bg.company_idx.get(ent.as_str())?].owner;
+            owner.player_id().or_else(|| owner.corp_sym().and_then(|c| bg.corp_idx.get(c)).and_then(|&i| bg.corporations[i].president_id()))
+        });
     if let Some(user) = raw.get("user").and_then(Value::as_u64) {
         if Some(user as u32) != acting {
             let name = g.players.iter().find(|p| p.0 == user as u32).map(|p| p.1.clone()).unwrap_or_else(|| "Owner".into());
@@ -284,7 +292,9 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             let corp = g.operator_of(&ent);
             let spent = bg.corp_idx.get(corp.as_str()).map_or(0, |&i| bg.corporations[i].cash) - a.corp_idx.get(corp.as_str()).map_or(0, |&i| a.corporations[i].cash);
             let spend = if spent > 0 { format!("spends ${spent} and ") } else { String::new() };
-            out.push(format!("{corp} {spend}lays tile #{name} with rotation {rot} on {}", hex_desc(a, hex)));
+            // Ruby Tracker#pay_tile_cost!: a private's lay names it, "C&O (CS) lays tile ..."
+            let via = if corp != ent { format!(" ({ent})") } else { String::new() };
+            out.push(format!("{corp}{via} {spend}lays tile #{name} with rotation {rot} on {}", hex_desc(a, hex)));
         }
         ("place_token", _) => {
             let corp = g.operator_of(&ent);
@@ -294,18 +304,29 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             let spent = bg.corp_idx.get(corp.as_str()).map_or(0, |&i| bg.corporations[i].cash) - a.corp_idx.get(corp.as_str()).map_or(0, |&i| a.corporations[i].cash);
             // Ruby: "places a token on <hex> (<location>) <price>" (the price part empty for a free one)
             let price_part = if spent > 0 { format!(" for ${spent}") } else { String::new() };
-            out.push(format!("{corp} places a token on {} {price_part}", hex_desc(a, &hex)));
+            // Ruby Tokener#place_token: a private's ability names it, "B&O (DH) places a token on ..."
+            let via = if corp != ent { format!(" ({ent})") } else { String::new() };
+            out.push(format!("{corp}{via} places a token on {} {price_part}", hex_desc(a, &hex)));
         }
         ("run_routes", _) => {
             for r in raw.get("routes").and_then(Value::as_array).cloned().unwrap_or_default() {
                 let train = r.get("train").and_then(Value::as_str).unwrap_or("");
                 let tname = train.rsplit_once('-').map_or(train, |x| x.0);
                 let rev = r.get("revenue").and_then(Value::as_i64).unwrap_or(0);
-                // the site's revenue_str: the stops' hexes as the train reaches them (a hex stopped at twice, twice)
-                let s = r.get("hexes").and_then(Value::as_array).map(|h| h.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("-"))
-                    .filter(|x| !x.is_empty())
-                    .or_else(|| r.get("revenue_str").and_then(Value::as_str).map(str::to_string))
-                    .unwrap_or_default();
+                // Ruby revenue_str (rl18xx-next c57803b): Route#visited_hexes, the stops' hexes as the train reaches them,
+                // a hex stopped at twice (both cities of an OO hex) twice; a route stored with fewer hexes than stops
+                // takes them from the track (Action::RunRoutes.h_to_args): its nodes' hexes
+                let hexes: Vec<&str> = r.get("hexes").and_then(Value::as_array).map(|h| h.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                let nodes: Vec<&str> = r.get("nodes").and_then(Value::as_array).map(|h| h.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+                // (Route#revenue_str: the stored string unless stale, else Game#revenue_str from the track)
+                let stale = !hexes.is_empty() && !nodes.is_empty() && hexes.len() < nodes.len();
+                let stored = r.get("revenue_str").and_then(Value::as_str).filter(|x| !x.is_empty());
+                let s = match stored {
+                    Some(x) if !stale => x.to_string(),
+                    _ => super::track::visited_hexes(g, &r)
+                        .or_else(|| (!nodes.is_empty()).then(|| nodes.iter().map(|n| n.rsplit_once('-').map_or(*n, |x| x.0)).collect::<Vec<_>>().join("-")))
+                        .unwrap_or_else(|| hexes.join("-")),
+                };
                 out.push(format!("{ent} runs a {tname} train for ${rev}: {s}"));
             }
         }
@@ -317,14 +338,14 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             };
             if kind == "payout" {
                 let per = rev / 10;
-                // each holder's dividend, the market's shares paying the company (1830), largest first; among equal
-                // amounts the players in the order they took the company's shares, then the company
+                // Ruby Dividend#payout_shares: the payees in (@game.players + @game.corporations) order, the market's
+                // shares paying the company (1830), then `sort_by { -cash }` -- stable in Opal, so equal amounts keep
+                // the payees' order
                 let mut pays: Vec<(i32, usize, String)> = Vec::new();
-                let holders = g.holders.get(&ent).cloned().unwrap_or_default();
-                for pid2 in super::view::player_order(g) {
+                for (k, pid2) in super::view::player_order(g).into_iter().enumerate() {
                     let n: i32 = bg.corp_idx.get(ent.as_str()).map_or(0, |&ci| bg.corporations[ci].shares.iter().filter(|s| s.owner == EntityId::player(pid2)).map(|s| s.percent as i32 / 10).sum());
                     if n * per > 0 {
-                        pays.push((-(n * per), holders.iter().position(|h| *h == pid2).unwrap_or(usize::MAX - 1), pname(a, pid2)));
+                        pays.push((-(n * per), k, pname(a, pid2)));
                     }
                 }
                 let pool: i32 = bg.corp_idx.get(ent.as_str()).map_or(0, |&ci| bg.corporations[ci].shares.iter().filter(|s| s.owner.is_market()).map(|s| s.percent as i32 / 10).sum());
@@ -343,7 +364,10 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             let train = raw.get("train").and_then(Value::as_str).unwrap_or("");
             let tname = train.rsplit_once('-').map_or(train, |x| x.0);
             let seller = bg.corporations.iter().find(|c| c.trains.iter().any(|x| x.id == train)).map(|c| c.sym.clone());
-            let from = seller.unwrap_or_else(|| "The Depot".into());
+            // Ruby Step::Train: a discarded train comes "from The Discard"
+            let from = seller.unwrap_or_else(|| {
+                if bg.depot.discarded.iter().any(|t| t.id == train) { "The Discard".into() } else { "The Depot".into() }
+            });
             if raw.get("exchange").is_some() {
                 let old = raw.get("exchange").and_then(Value::as_str).unwrap_or("");
                 let oname = old.rsplit_once('-').map_or(old, |x| x.0);
@@ -370,9 +394,12 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             out.push(format!("{ent} buys {} from {owner} for ${price}", cname(a, comp)));
         }
         ("buy_company", _) => {
+            // Ruby BuySellParShares#process_buy_company: from another player, "-- X buys ... from Y for $n"
             let comp = raw.get("company").and_then(Value::as_str).unwrap_or("");
+            let from_player = bg.company_idx.get(comp).is_some_and(|&i| bg.companies[i].owner.is_player());
             let owner = bg.company_idx.get(comp).map(|&i| holder_name(bg, &bg.companies[i].owner)).unwrap_or_default();
-            out.push(format!("{who} buys {} from {owner} for ${price}", cname(a, comp)));
+            let dash = if from_player { "-- " } else { "" };
+            out.push(format!("{dash}{who} buys {} from {owner} for ${price}", cname(a, comp)));
         }
         ("pass", Round::Operating(s)) => {
             let label = if s.teleport_pending {
@@ -420,21 +447,48 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
     }
     if a.phase.name != bg.phase.name {
         out.push(phase_line(a));
-        let rusted: Vec<(String, usize)> = bg
-            .corporations
-            .iter()
-            .filter_map(|c| {
-                let after = a.corporations.iter().find(|x| x.sym == c.sym)?;
-                let lost = c.trains.iter().filter(|t| !after.trains.iter().any(|x| x.id == t.id) && Some(t.id.as_str()) != raw.get("train").and_then(Value::as_str)).count();
-                (lost > 0).then(|| (c.sym.clone(), lost))
-            })
-            .collect();
+        // Ruby rust_trains!: the rusting trains in @depot.trains order (each type's trains by number), each owner
+        // counted in the order its first rusting train comes, an unsold or discarded train's owner The Depot (a
+        // train traded in for a D was reclaimed by the depot first)
+        let bought = raw.get("train").and_then(Value::as_str).unwrap_or("");
+        let traded = raw.get("exchange").and_then(Value::as_str).unwrap_or("");
+        let mut held: Vec<(String, String, String)> = Vec::new(); // (id, name, owner)
+        for c in &bg.corporations {
+            for t in &c.trains {
+                let owner = if t.id == traded { "The Depot".to_string() } else { c.sym.clone() };
+                held.push((t.id.clone(), t.name.clone(), owner));
+            }
+        }
+        for t in bg.depot.trains.iter().chain(bg.depot.discarded.iter()) {
+            held.push((t.id.clone(), t.name.clone(), "The Depot".to_string()));
+        }
+        let exists = |id: &str| {
+            a.corporations.iter().any(|c| c.trains.iter().any(|t| t.id == id))
+                || a.depot.trains.iter().chain(a.depot.discarded.iter()).any(|t| t.id == id)
+        };
+        let order: Vec<&str> = a.title_def().trains().iter().map(|t| t.name).collect();
+        let rank = |id: &str, name: &str| {
+            let n: u32 = id.rsplit_once('-').and_then(|x| x.1.parse().ok()).unwrap_or(0);
+            (order.iter().position(|x| *x == name).unwrap_or(usize::MAX), n)
+        };
+        let mut rusted: Vec<(String, String, String)> =
+            held.into_iter().filter(|(id, _, _)| id != bought && !exists(id)).collect();
+        rusted.sort_by_key(|(id, name, _)| rank(id, name));
+        rusted.dedup_by(|x, y| x.0 == y.0);
         if !rusted.is_empty() {
-            let name = bg.corporations.iter().flat_map(|c| c.trains.iter()).find(|t| rusted.iter().any(|(s, _)| bg.corporations.iter().any(|c| &c.sym == s && c.trains.iter().any(|x| x.id == t.id)))).map(|t| t.name.clone()).unwrap_or_default();
-            let mut r = rusted.clone();
-            r.sort();
-            let list: Vec<String> = r.iter().map(|(s, k)| format!("{s} x{k}")).collect();
-            out.push(format!("-- Event: {name} trains rust ({}) --", list.join(", ")));
+            let mut names: Vec<String> = Vec::new();
+            let mut owners: Vec<(String, usize)> = Vec::new();
+            for (_, name, owner) in &rusted {
+                if !names.contains(name) {
+                    names.push(name.clone());
+                }
+                match owners.iter_mut().find(|o| &o.0 == owner) {
+                    Some(o) => o.1 += 1,
+                    None => owners.push((owner.clone(), 1)),
+                }
+            }
+            let list: Vec<String> = owners.iter().map(|(s, k)| format!("{s} x{k}")).collect();
+            out.push(format!("-- Event: {} trains rust ({}) --", names.join(", "), list.join(", ")));
         }
     }
     let closing: Vec<String> = a.companies.iter().enumerate().filter(|(i, c)| c.closed && !bg.companies[*i].closed).map(|(_, c)| c.sym.clone()).collect();
@@ -499,7 +553,32 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
     // the operating company's remaining steps
     if let Some((corp, step, idx, _)) = op_corp(bg) {
         let home_choice = matches!(&bg.round, Round::Operating(s0) if !s0.pending_tokens.is_empty() && step == S::PlaceToken);
-        let next_from = if home_choice { step_pos(&S::PlaceToken) } else { step_pos(&step) + 1 };
+        // Ruby's step acted only if it processed the action itself (Round::Base#process_action sets `acted` on the
+        // step that processes it): a private bought meanwhile is the first, non-blocking BuyCompany step's, a
+        // private's lay or token its own step's, and 1830's blocking BuyCompany step at the end never acts (the
+        // first one processes every buy_company); a step that didn't act logs its skip
+        let t = raw_type(_raw);
+        let by_company = _raw.get("entity_type").and_then(Value::as_str) == Some("company");
+        let own = !by_company
+            && match step {
+                S::LayTile => matches!(t, "lay_tile" | "pass"),
+                S::PlaceToken => matches!(t, "place_token" | "pass"),
+                S::RunRoutes => t == "run_routes",
+                S::Dividend => t == "dividend",
+                S::BuyTrain => matches!(t, "buy_train" | "sell_shares" | "pass" | "bankrupt"),
+                S::BuyCompany => t == "pass",
+                _ => true,
+            };
+        let next_from = if home_choice {
+            step_pos(&S::PlaceToken)
+        } else if t == "discard_train" {
+            // a discard follows the operating company's train purchase (its BuyTrain step acted)
+            step_pos(&S::BuyTrain) + 1
+        } else if own {
+            step_pos(&step) + 1
+        } else {
+            step_pos(&step)
+        };
         match op_corp(a) {
             Some((c2, s2, i2, _)) if same_round && c2 == corp && i2 == idx => {
                 if step_pos(&s2) > next_from {
@@ -507,26 +586,51 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
                 }
             }
             _ => {
-                if step_pos(&step) < STEP_ORDER.len() {
+                if step_pos(&step) < STEP_ORDER.len() || t == "discard_train" {
                     skips(bg, a, &corp, next_from, STEP_ORDER.len(), out);
                 }
             }
         }
     }
-    // stock round: players skipped because they can't act
-    if let (Round::Stock(s0), Round::Stock(s1)) = (&bg.round, &a.round) {
-        if same_round {
-            let order = &s0.player_order;
-            let from = s0.current_player_index;
-            let to = s1.current_player_index;
-            if from != to {
-                let n = order.len();
-                let mut k = (from + 1) % n;
-                while k != to {
-                    out.push(format!("{} has no valid actions and passes", pname(a, order[k])));
-                    k = (k + 1) % n;
+    // stock round: players skipped because they can't act (Ruby Round::Stock#start_entity -> skip_steps ->
+    // BuySellParShares#skip! -> log_skip), from the player after the one whose turn ended up to the next player who
+    // can act -- all the way round when that is the same player again -- or, when the round ends, until every
+    // player has passed (each skip passes the player; the player whose turn just ended passed only if it did
+    // nothing else this turn)
+    if let Round::Stock(s0) = &bg.round {
+        let order = &s0.player_order;
+        let n = order.len();
+        let from = s0.current_player_index;
+        let t = raw_type(_raw);
+        let by_player = _raw.get("entity_type").and_then(Value::as_str) == Some("player");
+        match &a.round {
+            Round::Stock(s1) if same_round && by_player => {
+                let to = s1.current_player_index;
+                let ended = to != from || !s1.acted_this_turn;
+                if ended && n > 0 {
+                    let mut k = (from + 1) % n;
+                    while k != to {
+                        out.push(format!("{} has no valid actions and passes", pname(a, order[k])));
+                        k = (k + 1) % n;
+                    }
                 }
             }
+            _ if !same_round && by_player && n > 0 => {
+                let mut passed: Vec<bool> = (0..n).map(|i| s0.player_passed.get(i).copied().unwrap_or(false)).collect();
+                passed[from % n] = t == "pass" && !b.turn_acted;
+                let bankrupt = |pid: u32| bg.players.iter().any(|p| p.id == pid && p.bankrupt);
+                let mut k = (from + 1) % n;
+                let mut guard = 0;
+                while (0..n).any(|i| !passed[i] && !bankrupt(order[i])) && guard < 2 * n {
+                    if !bankrupt(order[k]) {
+                        out.push(format!("{} has no valid actions and passes", pname(a, order[k])));
+                        passed[k] = true;
+                    }
+                    k = (k + 1) % n;
+                    guard += 1;
+                }
+            }
+            _ => {}
         }
     }
     if same_round {
@@ -571,6 +675,10 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+fn raw_type(raw: &Value) -> &str {
+    raw.get("type").and_then(Value::as_str).unwrap_or("")
 }
 
 /// The lines of a company's turn starting (after `explain`): "X operates Y", its home station.

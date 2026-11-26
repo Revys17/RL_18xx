@@ -358,6 +358,13 @@ impl SiteGame {
             return Ok(());
         }
         if t.starts_with("program_") {
+            // Ruby's master-mode line for a program set for someone else's seat
+            if let (Some(user), Ok(e)) = (a.get("user").and_then(Value::as_u64), super::json::entity_of(a)) {
+                if e.parse::<u64>().ok() != Some(user) {
+                    let name = self.players.iter().find(|p| p.0 as u64 == user).map(|p| p.1.clone()).unwrap_or_else(|| "Owner".into());
+                    self.log_push(format!("• Action({t}) via Master Mode by: {name}"));
+                }
+            }
             self.note_program(a);
             return self.apply_autos(a);
         }
