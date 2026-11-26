@@ -19,9 +19,16 @@
 //! (Python-decode → dict → `from_py_dict`) path produced. Behavioral parity is
 //! verified against that old path in `tests/decode_parity_corpus.py`.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
 use crate::actions::{Action, DividendKind, GameError, RouteData};
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use serde_json::json;
 
@@ -841,8 +848,8 @@ impl BaseGame {
     /// Rust replacement for `apply_action`'s Python `ActionMapper` round-trip.
     /// `price` supplies the sampled price for continuous-price slots.
     fn apply_action_index(&mut self, idx: u32, price: Option<i64>) -> PyResult<()> {
-        let action = self.decode_index(idx, price).map_err(PyErr::from)?;
-        self.process_action_native(&action).map_err(PyErr::from)?;
+        let action = self.decode_index(idx, price).map_err(crate::pyerr::PyErr::from)?;
+        self.process_action_native(&action).map_err(crate::pyerr::PyErr::from)?;
         Ok(())
     }
 
@@ -854,7 +861,7 @@ impl BaseGame {
         idx: u32,
         price: Option<i64>,
     ) -> PyResult<std::collections::HashMap<String, String>> {
-        let action = self.decode_index(idx, price).map_err(PyErr::from)?;
+        let action = self.decode_index(idx, price).map_err(crate::pyerr::PyErr::from)?;
         Ok(action.to_map())
     }
 

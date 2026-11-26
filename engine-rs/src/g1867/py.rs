@@ -1,5 +1,13 @@
 //! PyO3 surface of the 1867 legal-move generator.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
+#[cfg(feature = "python")]
+
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 
@@ -16,7 +24,7 @@ pub(crate) fn policy_of(game: &BaseGame, policy: Option<&str>) -> PyResult<Cross
         None | Some("title") => Ok(game.title_def().generator_cross_player()),
         Some("rules") => Ok(CrossPlayerPolicy::RULES),
         Some("restricted") => Ok(CrossPlayerPolicy::RESTRICTED),
-        Some(other) => Err(pyo3::exceptions::PyValueError::new_err(format!("unknown policy {other:?}"))),
+        Some(other) => Err(crate::pyerr::exceptions::PyValueError::new_err(format!("unknown policy {other:?}"))),
     }
 }
 

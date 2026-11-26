@@ -3,10 +3,16 @@
 //! Each variant represents a player or entity decision.
 //! Actions are parsed from Python dicts and dispatched to round processors.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(feature = "python")]
+
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::PyDict;
 
 // ---------------------------------------------------------------------------
@@ -36,7 +42,7 @@ impl std::error::Error for GameError {}
 
 impl From<GameError> for PyErr {
     fn from(err: GameError) -> PyErr {
-        pyo3::exceptions::PyRuntimeError::new_err(err.message)
+        crate::pyerr::exceptions::PyRuntimeError::new_err(err.message)
     }
 }
 
@@ -322,6 +328,7 @@ impl Action {
         }
     }
 
+    #[cfg(feature = "python")]
     /// Parse an Action from a Python dict.
     ///
     /// Expected keys vary by action type:
@@ -737,6 +744,7 @@ fn parse_city_ref(city_str: &str) -> (String, u8) {
 // Dict extraction helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "python")]
 fn extract_entity_id(dict: &Bound<'_, PyDict>) -> Result<String, GameError> {
     let item = dict
         .get_item("entity")
@@ -753,6 +761,7 @@ fn extract_entity_id(dict: &Bound<'_, PyDict>) -> Result<String, GameError> {
     }
 }
 
+#[cfg(feature = "python")]
 fn extract_string(dict: &Bound<'_, PyDict>, key: &str) -> Result<String, GameError> {
     dict.get_item(key)
         .map_err(|e| GameError::new(format!("Error reading '{}': {}", key, e)))?
@@ -761,6 +770,7 @@ fn extract_string(dict: &Bound<'_, PyDict>, key: &str) -> Result<String, GameErr
         .map_err(|e| GameError::new(format!("'{}' must be a string: {}", key, e)))
 }
 
+#[cfg(feature = "python")]
 fn extract_i32(dict: &Bound<'_, PyDict>, key: &str) -> Result<i32, GameError> {
     dict.get_item(key)
         .map_err(|e| GameError::new(format!("Error reading '{}': {}", key, e)))?
@@ -769,6 +779,7 @@ fn extract_i32(dict: &Bound<'_, PyDict>, key: &str) -> Result<i32, GameError> {
         .map_err(|e| GameError::new(format!("'{}' must be an integer: {}", key, e)))
 }
 
+#[cfg(feature = "python")]
 fn extract_optional_string(
     dict: &Bound<'_, PyDict>,
     key: &str,
@@ -788,6 +799,7 @@ fn extract_optional_string(
     }
 }
 
+#[cfg(feature = "python")]
 fn extract_optional_i32(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<i32>, GameError> {
     match dict.get_item(key) {
         Ok(Some(item)) => {
@@ -804,6 +816,7 @@ fn extract_optional_i32(dict: &Bound<'_, PyDict>, key: &str) -> Result<Option<i3
     }
 }
 
+#[cfg(feature = "python")]
 fn extract_routes(dict: &Bound<'_, PyDict>) -> Result<Vec<RouteData>, GameError> {
     let routes_item = match dict.get_item("routes") {
         Ok(Some(item)) => item,
@@ -851,6 +864,7 @@ fn extract_routes(dict: &Bound<'_, PyDict>) -> Result<Vec<RouteData>, GameError>
     Ok(result)
 }
 
+#[cfg(feature = "python")]
 /// Parse share_price which can be:
 /// - An integer (direct price)
 /// - A string like "100,0,6" (price,row,col) — extract just the price
@@ -880,6 +894,7 @@ fn extract_share_price(dict: &Bound<'_, PyDict>) -> Result<i32, GameError> {
     ))
 }
 
+#[cfg(feature = "python")]
 /// Extract corporation sym and share IDs from a buy_shares/sell_shares dict.
 /// The dict may have "shares": ["PRR_2", "PRR_3"] and/or "corporation": "PRR".
 fn extract_shares_info(dict: &Bound<'_, PyDict>) -> Result<(String, Vec<String>), GameError> {
@@ -910,6 +925,7 @@ fn extract_shares_info(dict: &Bound<'_, PyDict>) -> Result<(String, Vec<String>)
     ))
 }
 
+#[cfg(feature = "python")]
 fn extract_share_ids(dict: &Bound<'_, PyDict>) -> Vec<String> {
     match dict.get_item("shares") {
         Ok(Some(item)) => item.extract::<Vec<String>>().unwrap_or_default(),

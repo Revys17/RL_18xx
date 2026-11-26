@@ -31,6 +31,7 @@ pub mod g1822;
 pub mod g1867;
 pub mod generator;
 pub mod layout;
+#[cfg(feature = "python")]
 pub mod py;
 
 pub use descriptor::{Descriptor, EntKind, Family, PriceKind};

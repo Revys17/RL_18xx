@@ -54,7 +54,14 @@
 //!   of this search (a reused subtree's earlier visits don't count toward the
 //!   budget); q, ``v_mix`` and ``max_b N(b)`` use every visit the tree has.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
+use crate::pyerr::exceptions::{PyRuntimeError, PyValueError};
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use rand::Rng;
 
@@ -434,6 +441,7 @@ impl RustMCTSPlayer {
         Ok(out)
     }
 
+    #[cfg(feature = "python")]
     /// Diagnostics of the root's Gumbel state, per legal move (in
     /// ``legal_action_indices_at_root`` order): ``{"legal", "noise",
     /// "logits", "completed_q", "considered", "search_visits",

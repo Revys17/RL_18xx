@@ -1,6 +1,14 @@
 //! PyO3 surface for 1822-family games (inspection for the replay
 //! harness / Ruby diff rig, and the legal-action generator).
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
+#[cfg(feature = "python")]
+
 use pyo3::prelude::*;
 
 use crate::entities::EntityId;
@@ -15,7 +23,7 @@ impl BaseGame {
     /// corps' price/cash/trains, player cash by id, bank).
     pub(crate) fn g1822_snapshot(&self) -> PyResult<String> {
         let Some(st) = self.g1822.as_deref() else {
-            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+            return Err(crate::pyerr::exceptions::PyValueError::new_err("not an 1822-family game"));
         };
         let r = &st.round;
         let round = match r.kind {
@@ -156,13 +164,13 @@ impl BaseGame {
     #[pyo3(signature = (policy=None))]
     fn g1822_legal_moves_json(&mut self, policy: Option<&str>) -> PyResult<String> {
         if self.g1822.is_none() {
-            return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
+            return Err(crate::pyerr::exceptions::PyValueError::new_err("not an 1822-family game"));
         }
         let policy = match policy {
             None => self.title_def().generator_cross_player(),
             Some("rules") => crate::title::CrossPlayerPolicy::RULES,
             Some("restricted") => crate::title::CrossPlayerPolicy::RESTRICTED,
-            Some(p) => return Err(pyo3::exceptions::PyValueError::new_err(format!("unknown policy {p:?}"))),
+            Some(p) => return Err(crate::pyerr::exceptions::PyValueError::new_err(format!("unknown policy {p:?}"))),
         };
         let moves = self.g1822_legal_moves_with(policy);
         let out: Vec<serde_json::Value> = moves
@@ -400,6 +408,7 @@ impl BaseGame {
     /// (None = the title's, "rules") against the reference generator's,
     /// sorted, and at the RL index level; the state must be left as it was.
     /// `(moves compared, None)` or the first difference.
+    #[cfg(feature = "python")]
     #[pyo3(signature = (policy=None))]
     fn g1822_reference_diff(&mut self, policy: Option<&str>) -> PyResult<(usize, Option<String>)> {
         if self.g1822.is_none() {
@@ -411,6 +420,7 @@ impl BaseGame {
 
     /// The instance of tile `name` the generator's lays offer (the first of
     /// the name in Ruby's supply order; `scripts/g1822_tile_instance_check.py`).
+    #[cfg(feature = "python")]
     fn g1822_offered_tile_instance(&self, name: &str) -> PyResult<String> {
         if self.g1822.is_none() {
             return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
@@ -421,6 +431,7 @@ impl BaseGame {
     /// The fast paths' pure helpers against their references on this state
     /// (neighbour map, every tokened corporation's graph): None, or the
     /// first difference.
+    #[cfg(feature = "python")]
     fn g1822_graph_check(&self) -> PyResult<Option<String>> {
         if self.g1822.is_none() {
             return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
@@ -432,6 +443,7 @@ impl BaseGame {
     /// one reference run (its title-policy list derived from its rules'
     /// list: `BaseGame::g1822_reference_diff_both_policies`). `(moves compared, None)`
     /// or the first difference.
+    #[cfg(feature = "python")]
     fn g1822_reference_diff_both(&mut self) -> PyResult<(usize, Option<String>)> {
         if self.g1822.is_none() {
             return Err(pyo3::exceptions::PyValueError::new_err("not an 1822-family game"));
@@ -442,6 +454,7 @@ impl BaseGame {
     /// Debug: every generated move of type `action_type` (None: all) under
     /// `policy` applied to a clone: `[(move, error)]` for those the process
     /// refuses (a generator bug for pre-validated moves).
+    #[cfg(feature = "python")]
     #[pyo3(signature = (action_type=None, policy=None))]
     fn g1822_refused_generated_moves(
         &mut self,

@@ -16,17 +16,32 @@
 //! expanded and backed up, as ``tree_search`` + ``incorporate_results`` do.
 //! ``rl18xx/agent/alphazero/lockstep.py`` drives it.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "python")]
 use std::sync::Arc;
 
+#[cfg(feature = "python")]
+
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArrayDyn, PyUntypedArrayMethods};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use crate::pyerr::exceptions::{PyRuntimeError, PyValueError};
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::PyDict;
 
-use crate::encoder::{spec_for, MAX_PLAYERS};
+#[cfg(feature = "python")]
+use crate::encoder::spec_for;
+use crate::encoder::MAX_PLAYERS;
 use crate::game::BaseGame;
-use crate::mcts::{decode_slot_index, PriceComponents, RustMCTSPlayer};
+#[cfg(feature = "python")]
+use crate::mcts::decode_slot_index;
+#[cfg(feature = "python")]
+use crate::mcts::PriceComponents;
+use crate::mcts::RustMCTSPlayer;
+#[cfg(feature = "python")]
 use crate::price_pmf::NUM_CELLS;
 
 const VALUE_SIZE: usize = MAX_PLAYERS;
@@ -254,6 +269,7 @@ impl Stacked {
         Ok(enc.rotation)
     }
 
+    #[cfg(feature = "python")]
     fn into_dict<'py>(self, py: Python<'py>, title: &str) -> PyResult<Bound<'py, PyDict>> {
         let spec = spec_for(title);
         let d = PyDict::new(py);
@@ -290,6 +306,8 @@ impl Stacked {
 /// ``dedupe_maps``, ``node_features`` is (M, hexes, features), each distinct
 /// map once, and ``map_index`` (B,) int64 each leaf's row in it
 /// (``node_features[map_index]`` is the plain layout).
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (trees, max_leaves, dedupe, use_score_values, dedupe_maps=false))]
 pub fn mcts_collect_leaves<'py>(
@@ -363,6 +381,7 @@ pub fn mcts_collect_leaves<'py>(
 /// ``counts``, ``terminal``, ``legal`` and ``legal_lengths`` as
 /// ``mcts_collect_leaves``. Each tree keeps its leaves pending until
 /// ``mcts_apply_results``.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (trees, max_leaves, dedupe, use_score_values))]
 pub fn mcts_collect_leaf_games<'py>(
@@ -417,6 +436,8 @@ pub fn mcts_collect_leaf_games<'py>(
 /// ``game_states``, ``node_features``, ``round_types``, ``rotations``,
 /// ``num_players`` (with ``dedupe_maps``, each distinct map once and
 /// ``map_index``). One player count per call.
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (games, dedupe_maps=false))]
 pub fn encode_games<'py>(
@@ -444,6 +465,8 @@ pub fn encode_games<'py>(
 /// ``prior_temperature``; ``price_logits`` (B, slots, cells) or (B, slots *
 /// cells) and ``slot_index``: the price head's rows and slot layout, if the
 /// model has one.
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (trees, priors, values, prior_temperature, price_logits=None, slot_index=None))]
 pub fn mcts_apply_results<'py>(
@@ -539,6 +562,8 @@ pub fn mcts_apply_results<'py>(
 
 /// The value a search backs up at a finished ``game`` (``terminal_value``;
 /// ``score_weight`` / ``score_points``: ``RustMCTSPlayer.set_terminal_utility``'s).
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (game, use_score_values, score_weight=0.0, score_points=None))]
 pub fn mcts_terminal_value(
@@ -552,6 +577,8 @@ pub fn mcts_terminal_value(
 
 /// Forget the trees' pending batches without applying them (virtual losses
 /// reverted), e.g. after a failed request.
+#[cfg(feature = "python")]
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn mcts_discard_pending(trees: Vec<Bound<'_, RustMCTSPlayer>>) {
     for tree in trees {

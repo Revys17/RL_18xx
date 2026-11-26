@@ -21,6 +21,7 @@ pub mod fastwalk;
 pub mod fuzz;
 pub mod graph;
 pub mod legal;
+#[cfg(feature = "python")]
 pub mod py;
 pub mod router;
 pub mod tile_rules;

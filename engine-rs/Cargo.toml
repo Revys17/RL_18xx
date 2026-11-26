@@ -5,19 +5,44 @@ edition = "2021"
 
 [lib]
 name = "engine_rs"
-crate-type = ["cdylib"]
+# cdylib: the Python extension module (maturin) and the wasm package; rlib: the site's native tools
+# (`src/bin/site_engine.rs`, `src/bin/site_replay.rs`) link the library like any Rust crate.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.24", features = ["multiple-pymethods"] }
+pyo3 = { version = "0.24", features = ["multiple-pymethods"], optional = true }
+# No-op stand-ins for pyo3's attribute macros in builds without Python (the wasm package, the site tools).
+pyo3-noop = { path = "pyo3-noop" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-numpy = "0.24"
+numpy = { version = "0.24", optional = true }
 rand = "0.8"
 rand_distr = "0.4"
+# Must equal the wasm-bindgen CLI that generates the JS glue (site/build-site.sh checks it).
+wasm-bindgen = { version = "=0.2.123", optional = true }
 
 [features]
-# The wheel build (maturin / `uv sync`) uses the default features and so
-# compiles as a Python extension module. `cargo test --no-default-features`
-# drops extension-module so the test binary can link against libpython.
+# The wheel build (maturin / `uv sync`) uses the default features and so compiles as a Python extension module,
+# unchanged. `cargo test --release --no-default-features --features python` drops extension-module so the test
+# binary can link against libpython (scripts/pre-push.hook).
 default = ["extension-module"]
-extension-module = ["pyo3/extension-module"]
+python = ["dep:pyo3", "dep:numpy"]
+extension-module = ["python", "pyo3/extension-module"]
+# The site layer (src/site/, docs/SITE_ENGINE_RS.md): the site's JSON, Ruby's undo filter, views, menus, the
+# shadow key and the `site_engine` CLI. No Python.
+site = []
+# The site layer as a wasm-bindgen package (src/site/wasm.rs, site/build-site.sh).
+wasm = ["site", "dep:wasm-bindgen"]
+# The registry trimmed to 1830 (the browser's wasm package: site/build-site.sh).
+only-1830 = []
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
+# The wasm package (site/build-site.sh): small and whole-program optimised. The wheel keeps `release`.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

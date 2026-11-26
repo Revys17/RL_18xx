@@ -9,10 +9,16 @@
 //! The inverse (index -> action) is native Rust in `decode.rs`
 //! (`BaseGame::decode_index`) — no Python round-trip.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+#[cfg(feature = "python")]
+
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyDict, PyTuple};
 
 use crate::actions::GameError;
@@ -602,6 +608,7 @@ fn index_for_factored_buy_train(lo: &SlotLayout, la: &LegalAction) -> Option<u32
 // ----------------------------------------------------------------------------
 
 /// Return the layout's `action_offsets` map (for Python-side debugging).
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn action_offsets_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     let lo = layout();
@@ -614,6 +621,7 @@ pub fn action_offsets_py(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
 
 /// Total 1830 policy size, derived from the layout (matches Python
 /// `ActionMapper().action_encoding_size`).
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn policy_size_py() -> u32 {
     layout().total
@@ -621,6 +629,7 @@ pub fn policy_size_py() -> u32 {
 
 /// A title's policy size, derived from its layout (RuntimeError "not
 /// bridge-ready" for a title without one, instead of a panic).
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn policy_size_for_py(title_name: &str) -> PyResult<u32> {
     Ok(try_layout_for(title_name)?.total)
@@ -629,6 +638,7 @@ pub fn policy_size_for_py(title_name: &str) -> PyResult<u32> {
 /// Compatibility shim so external callers can resolve a Python-side
 /// LegalAction-style dict to a flat index without crossing the LegalAction
 /// type. Accepts a (type, entity_dict, params_dict) tuple.
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn legal_action_to_index_py(t: &str, entity: &Bound<'_, PyDict>, params: &Bound<'_, PyDict>) -> PyResult<Option<u32>> {
     let mut la = LegalAction {
@@ -659,6 +669,7 @@ pub fn legal_action_to_index_py(t: &str, entity: &Bound<'_, PyDict>, params: &Bo
     Ok(legal_action_to_index(&la))
 }
 
+#[cfg(feature = "python")]
 fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
     if let Ok(s) = v.extract::<String>() {
         return Ok(serde_json::Value::String(s));
@@ -680,6 +691,7 @@ fn py_to_json_value(v: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
 // `BaseGame` and `PyTuple` aren't directly used by this module's public API,
 // but keep the imports so future native decode work (Phase 4c) can wire in
 // without re-shuffling the prelude.
+#[cfg(feature = "python")]
 #[allow(dead_code)]
 fn _force_unused(_g: Option<&BaseGame>, _t: Option<&Bound<'_, PyTuple>>) {}
 

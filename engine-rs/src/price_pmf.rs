@@ -7,7 +7,11 @@
 //! *bins* whose mass is spread uniformly over their integers. The price head
 //! emits one logit per cell; `P(price) = softmax(nonempty logits)[cell] / |cell|`.
 
-use pyo3::exceptions::PyValueError;
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+use crate::pyerr::exceptions::PyValueError;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use rand::Rng;
 
@@ -171,12 +175,14 @@ fn cells_or_err(action_type: &str, lo: i64, hi: i64, bid_step: i64) -> PyResult<
 }
 
 /// Per-cell price counts for `[lo, hi]` (parity tests).
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn price_pmf_counts(action_type: &str, lo: i64, hi: i64, bid_step: i64) -> PyResult<Vec<i64>> {
     Ok(cells_or_err(action_type, lo, hi, bid_step)?.counts.to_vec())
 }
 
 /// The cell holding `price` (parity tests).
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn price_pmf_cell_of(action_type: &str, price: i64, lo: i64, hi: i64, bid_step: i64) -> PyResult<usize> {
     cells_or_err(action_type, lo, hi, bid_step)?
@@ -185,6 +191,7 @@ pub fn price_pmf_cell_of(action_type: &str, price: i64, lo: i64, hi: i64, bid_st
 }
 
 /// The `u`-th price of `cell` (parity tests).
+#[cfg(feature = "python")]
 #[pyfunction]
 pub fn price_pmf_member(action_type: &str, cell: usize, u: i64, lo: i64, hi: i64, bid_step: i64) -> PyResult<i64> {
     cells_or_err(action_type, lo, hi, bid_step)?

@@ -19,7 +19,14 @@
 //! `Move`); the 1822 family's are `rl_g1822_*`. The Python methods serve
 //! every generator title.
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::pymethods;
 use serde_json::{json, Value};
 
 use super::layout::RlLayout;
@@ -390,10 +397,12 @@ impl BaseGame {
 
 /// The policy argument of the Python surface: None = the title's,
 /// "rules" = everything Ruby accepts, "restricted".
+#[cfg(feature = "python")]
 fn policy(game: &BaseGame, p: Option<&str>) -> PyResult<CrossPlayerPolicy> {
     crate::g1867::py::policy_of(game, p)
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl BaseGame {
     /// The state's legal indices in the title's RL layout (a generator

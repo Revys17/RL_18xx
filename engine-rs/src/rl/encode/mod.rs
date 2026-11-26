@@ -29,6 +29,7 @@
 //! frozen encoder, layout and model are untouched.
 
 pub mod encode;
+#[cfg(feature = "python")]
 pub mod py;
 pub mod schema;
 pub mod spec;

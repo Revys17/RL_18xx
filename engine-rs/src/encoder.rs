@@ -3,6 +3,14 @@
 //! Returns raw `Vec<f32>` arrays — Python wraps them in torch tensors.
 //! This eliminates the ~2ms proxy overhead of the Python encoder on the Rust adapter.
 
+#[cfg(feature = "python")]
+use pyo3::pymethods;
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -763,8 +771,9 @@ impl BaseGame {
     }
 }
 
-#[pyo3::pymethods]
+#[pymethods]
 impl BaseGame {
+    #[cfg(feature = "python")]
     /// The network's input for this position, natively: ``(game_state (D,),
     /// node_features (num_hexes, features), round_type, rotation,
     /// num_players)`` as float32 numpy arrays and ints -- what
@@ -780,6 +789,7 @@ impl BaseGame {
         usize,
         usize,
     )> {
+        #[cfg(feature = "python")]
         use numpy::{PyArray1, PyArrayMethods};
         let spec = spec_for(&self.title);
         let enc = self.encode_canonical();

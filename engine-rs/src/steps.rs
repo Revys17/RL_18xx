@@ -41,6 +41,9 @@
 //!     "minor's first OR turn" — the accumulation loop and skip machinery pick
 //!     it up automatically because they iterate the title's list.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
 use crate::actions::{Action, GameError};
 use crate::entities::EntityId;
 use crate::game::BaseGame;
@@ -1655,6 +1658,7 @@ impl BaseGame {
 // PyO3 surface
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 #[pymethods]

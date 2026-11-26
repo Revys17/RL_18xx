@@ -14,12 +14,22 @@
 //! categorical slot so categorical-level PUCT integrates over all
 //! grandchildren under one slot. See Python's ``MCTSNode`` for the reference.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(feature = "python")]
+
 use numpy::PyReadonlyArray1;
-use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyValueError};
+use crate::pyerr::exceptions::{PyIndexError, PyRuntimeError, PyValueError};
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::PyDict;
 use rand::{Rng, SeedableRng};
 use rand_distr::{Dirichlet, Distribution};
@@ -449,6 +459,7 @@ impl RustMCTSPlayer {
 
 #[pymethods]
 impl RustMCTSPlayer {
+    #[cfg(feature = "python")]
     /// Build a fresh player from a Python-supplied BaseGame.
     ///
     /// Accepts either an `engine_rs.BaseGame` directly or a `RustGameAdapter`
@@ -1125,6 +1136,7 @@ impl RustMCTSPlayer {
     }
 
 
+    #[cfg(feature = "python")]
     /// Incorporate priors + value at the leaf (Python's `incorporate_results`).
     ///
     /// `probs`: numpy float32 vector of length POLICY_SIZE (full policy).
@@ -1182,6 +1194,7 @@ impl RustMCTSPlayer {
         Ok(())
     }
 
+    #[cfg(feature = "python")]
     /// Wrap the leaf's encoded game state for Python-side NN inference.
     /// Returns the bare BaseGame python object so Python can call its
     /// existing `Encoder_GNN` flow.
@@ -1305,6 +1318,7 @@ impl RustMCTSPlayer {
         Ok(())
     }
 
+    #[cfg(feature = "python")]
     /// Whether the root's position is ``game``'s: the same number of actions
     /// played and the same action entries from ``start`` on (the entries
     /// before it known to agree, e.g. the root log's length before the last
@@ -1332,6 +1346,7 @@ impl RustMCTSPlayer {
         self.arena.len()
     }
 
+    #[cfg(feature = "python")]
     /// Diagnostics (tests): node ``arena_idx``'s per-move statistics, in its
     /// ``legal_action_indices`` order: ``{"legal", "child_n", "child_w"
     /// (moves x VALUE_SIZE), "child_prior", "price_child_n" ({move: {price:
@@ -1372,6 +1387,7 @@ impl RustMCTSPlayer {
             .collect())
     }
 
+    #[cfg(feature = "python")]
     /// What a policy target computed outside the tree needs from the root
     /// (``search_targets.py``: completed-Q and regularized-policy targets on
     /// PUCT roots), per legal move in ``legal_action_indices_at_root`` order:
@@ -1714,6 +1730,7 @@ impl RustMCTSPlayer {
         self.arena[self.root_idx].active_player_index
     }
 
+    #[cfg(feature = "python")]
     /// Return the root's BaseGame as a Python object (a fresh clone — the
     /// arena retains its own copy). Mirrors ``get_game_for_idx(root_idx)``.
     fn root_game_object(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -2215,6 +2232,7 @@ fn apply_action(
 // Price-components decoder
 // ----------------------------------------------------------------------------
 
+#[cfg(feature = "python")]
 /// Decode a Python dict {price_logits, slot_index, num_slots} into the Rust
 /// ``PriceComponents`` struct. ``price_logits`` is a numpy float32 array (or
 /// torch tensor) of ``num_slots x NUM_CELLS`` cell logits, flat or 2-D.
@@ -2262,6 +2280,7 @@ fn decode_price_components(py: Python<'_>, dict: &Bound<'_, PyAny>) -> PyResult<
     })
 }
 
+#[cfg(feature = "python")]
 /// Decode the price head's ``slot_index`` dict: ``(action_type, (entity key
 /// parts...)) -> slot row``.
 pub(crate) fn decode_slot_index(

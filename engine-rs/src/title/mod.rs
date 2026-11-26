@@ -631,7 +631,13 @@ pub fn all_titles() -> &'static [&'static dyn GameTitle] {
         ];
         &TITLES
     }
-    #[cfg(not(test))]
+    // The wasm package trimmed to 1830 (site/build-site.sh): the other titles left out of the registry.
+    #[cfg(all(not(test), feature = "only-1830"))]
+    {
+        static TITLES: [&'static dyn GameTitle; 1] = [&G1830];
+        &TITLES
+    }
+    #[cfg(all(not(test), not(feature = "only-1830")))]
     {
         static TITLES: [&'static dyn GameTitle; 6] = [
             &G1830,

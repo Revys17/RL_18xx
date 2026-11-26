@@ -56,8 +56,13 @@
 //! The chosen run's prices come from `revenue::price_bucketed_stops` (the
 //! replay pricer); the walk's own pricing is checked against it.
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[cfg(feature = "python")]
 
 use pyo3::prelude::*;
 

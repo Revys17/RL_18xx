@@ -802,6 +802,7 @@ fn rule_flags_follow_the_options() {
 }
 
 /// Mixed titles and player counts stack into one padded batch.
+#[cfg(feature = "python")]
 #[test]
 fn batch_stacks_mixed_titles() {
     let games = [new_game("1830", 4, 1), new_game("1867", 5, 1), new_game("1822", 3, 1)];
@@ -1027,6 +1028,7 @@ fn time_per_position<F: FnMut(&BaseGame)>(games: &[BaseGame], reps: usize, mut f
     t.elapsed().as_secs_f64() / (reps * games.len()) as f64
 }
 
+#[cfg(feature = "python")]
 #[test]
 #[ignore]
 fn bench_encoders() {

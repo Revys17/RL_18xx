@@ -17,18 +17,44 @@ if [ $status -ne 0 ]; then
 fi
 
 # Rust in-crate unit tests — includes the frozen-1830-action-layout test
-# (action_index.rs), which pytest never exercises. Needs a linkable
-# libpython: point PyO3 at the venv interpreter and put its LIBDIR on the
-# runtime path.
-echo "pre-push: running cargo test --no-default-features..."
+# (action_index.rs) and the training-neutrality walks (neutrality.rs), which
+# pytest never exercises. PyO3 is optional (feature `python`, in the default
+# `extension-module`), so the Python build is tested with `--features python`;
+# it needs a linkable libpython: point PyO3 at the venv interpreter and put its
+# LIBDIR on the runtime path.
+echo "pre-push: running cargo test --no-default-features --features python..."
 PY="$(pwd)/.venv/bin/python"
 LIBDIR="$("$PY" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"
-(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features -q)
+(cd engine-rs && PYO3_PYTHON="$PY" LD_LIBRARY_PATH="$LIBDIR" cargo test --release --no-default-features --features python -q)
 status=$?
 
 if [ $status -ne 0 ]; then
-    echo "pre-push: cargo tests FAILED — push aborted." >&2
+    echo "pre-push: cargo tests (python) FAILED — push aborted." >&2
     exit $status
+fi
+
+# The site layer's build (docs/SITE_ENGINE_RS.md): no Python at all. The same
+# unit tests (neutrality included) plus the site layer's own.
+echo "pre-push: running cargo test --no-default-features --features site..."
+(cd engine-rs && cargo test --release --no-default-features --features site -q)
+status=$?
+
+if [ $status -ne 0 ]; then
+    echo "pre-push: cargo tests (site) FAILED — push aborted." >&2
+    exit $status
+fi
+
+# The browser's wasm package must keep compiling (only if the target is installed).
+if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then
+    echo "pre-push: running cargo check --target wasm32-unknown-unknown --features wasm..."
+    (cd engine-rs && cargo check --release --target wasm32-unknown-unknown --no-default-features --features wasm -q)
+    status=$?
+    if [ $status -ne 0 ]; then
+        echo "pre-push: wasm32 check FAILED — push aborted." >&2
+        exit $status
+    fi
+else
+    echo "pre-push: wasm32-unknown-unknown not installed: skipping the wasm check."
 fi
 
 echo "pre-push: all gates passed."

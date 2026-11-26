@@ -10,9 +10,18 @@
 //! engine's existing query methods (`buyable_shares`, `sellable_bundles`,
 //! `auction_min_bid`, ...).
 
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
 use std::collections::HashMap;
 
+#[cfg(feature = "python")]
+
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::PyDict;
 use serde_json::json;
 
@@ -53,6 +62,7 @@ impl LegalAction {
         }
     }
 
+    #[cfg(feature = "python")]
     /// Convert to a Python dict.
     pub fn to_py_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let dict = PyDict::new(py);
@@ -75,7 +85,9 @@ impl LegalAction {
     }
 }
 
+#[cfg(feature = "python")]
 fn json_to_py(py: Python<'_>, v: &serde_json::Value) -> PyResult<PyObject> {
+    #[cfg(feature = "python")]
     use pyo3::IntoPyObject;
     Ok(match v {
         serde_json::Value::Null => py.None(),
@@ -1793,6 +1805,7 @@ impl BaseGame {
 
 #[pymethods]
 impl BaseGame {
+    #[cfg(feature = "python")]
     /// Return the factored legal-action list as a `Vec<dict>`.
     ///
     /// Each entry has keys ``type``, ``entity``, ``params``, ``price_range``

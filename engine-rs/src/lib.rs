@@ -1,11 +1,17 @@
+// Builds without Python (the site layer's tools and the wasm package, docs/SITE_ENGINE_RS.md §4.1) leave the
+// Python-only call sites out, so code only they reach is dead there; the wheel build keeps every warning.
+#![cfg_attr(not(feature = "python"), allow(dead_code))]
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 /// The titles this engine build can construct (`BaseGame.new_titled`).
+#[cfg(feature = "python")]
 #[pyfunction]
 fn supported_titles_py() -> Vec<&'static str> {
     title::all_titles().iter().map(|t| t.name()).collect()
 }
 
+pub mod pyerr;
 pub mod abilities;
 pub mod action_index;
 pub mod actions;
@@ -35,6 +41,7 @@ pub mod tiles;
 pub mod title;
 
 /// Rust-accelerated game engine for 18xx board games.
+#[cfg(feature = "python")]
 #[pymodule]
 fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Game

@@ -1,8 +1,16 @@
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use crate::pyerr::{PyErr, PyResult};
+#[cfg(not(feature = "python"))]
+#[allow(unused_imports)]
+use pyo3_noop::{pyclass, pymethods};
 use std::collections::HashMap;
 
 use std::sync::Arc;
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 use crate::actions::{Action, GameError};
@@ -24,6 +32,7 @@ pub(crate) const SHUFFLE_MAX_ORS: u32 = 2;
 // Python <-> serde_json conversion helpers
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "python")]
 /// Convert a Python value into a `serde_json::Value`.
 ///
 /// Handles ``None``, ``bool``, ``int``, ``float``, ``str``, ``list``/``tuple``
@@ -79,6 +88,7 @@ fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
     Ok(serde_json::Value::String(value.to_string()))
 }
 
+#[cfg(feature = "python")]
 /// Convert a `serde_json::Value` into a Python object.
 fn json_to_py_obj(py: Python<'_>, v: &serde_json::Value) -> PyResult<PyObject> {
     use pyo3::IntoPyObject;
@@ -2766,7 +2776,7 @@ impl BaseGame {
             .filter(|r| !supported.contains(r))
             .collect();
         if !unsupported.is_empty() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            return Err(crate::pyerr::exceptions::PyValueError::new_err(format!(
                 "optional rules not implemented for {title_name}: {unsupported:?} (supported: {supported:?})"
             )));
         }
@@ -3033,6 +3043,7 @@ impl BaseGame {
 
 #[pymethods]
 impl BaseGame {
+    #[cfg(feature = "python")]
     /// PyO3 constructor. Seats players in the dict's insertion order — Python
     /// seats in input/JSON order and a Python dict iterates insertion order, so
     /// building from the raw dict (instead of a HashMap, which loses order)
@@ -3059,6 +3070,7 @@ impl BaseGame {
         Ok(Self::build_with_rules("1830", player_ids, names, optional_rules))
     }
 
+    #[cfg(feature = "python")]
     /// Construct a game of any registered title (the title-aware sibling of
     /// `new`). Raises ValueError for an unknown title — callers (e.g. the
     /// per-title replay harnesses) probe `supported_titles_py()` first.
@@ -3071,7 +3083,7 @@ impl BaseGame {
         seed: Option<u64>,
     ) -> PyResult<Self> {
         if !crate::title::all_titles().iter().any(|t| t.name() == title) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            return Err(crate::pyerr::exceptions::PyValueError::new_err(format!(
                 "unknown game title: {title}"
             )));
         }
@@ -3088,7 +3100,7 @@ impl BaseGame {
         // 1867 seats 2-6 (Ruby CERT_LIMIT / STARTING_CASH keys); other
         // counts used to panic in the title's starting_cash.
         if t.name() == "1867" && !(2..=6).contains(&player_ids.len()) {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            return Err(crate::pyerr::exceptions::PyValueError::new_err(format!(
                 "1867: unsupported player count {}",
                 player_ids.len()
             )));
@@ -3097,7 +3109,7 @@ impl BaseGame {
             let n = player_ids.len() as u8;
             let (lo, hi) = t.g1822_family().map_or((0, 0), |f| f.player_range);
             if !(lo..=hi).contains(&n) {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                return Err(crate::pyerr::exceptions::PyValueError::new_err(format!(
                     "{title}: unsupported player count {n}"
                 )));
             }
@@ -3106,7 +3118,7 @@ impl BaseGame {
                 .iter()
                 .find(|id| t.corporations().iter().any(|c| c.sym == id.to_string()))
             {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                return Err(crate::pyerr::exceptions::PyValueError::new_err(format!(
                     "{title}: player id {bad} collides with a corporation sym (use ids above 100)"
                 )));
             }
@@ -3275,8 +3287,8 @@ impl BaseGame {
             .title_def()
             .recorded_route_revenue(self, &corp_sym, &route)
         {
-            Some(res) => res.map_err(PyErr::from),
-            None => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+            Some(res) => res.map_err(crate::pyerr::PyErr::from),
+            None => Err(crate::pyerr::exceptions::PyRuntimeError::new_err(format!(
                 "title {} does not compute recorded route revenue",
                 self.title
             ))),
@@ -3329,6 +3341,7 @@ impl BaseGame {
         self.cert_limit
     }
 
+    #[cfg(feature = "python")]
     /// Process a game action from a Python dict.
     ///
     /// This is the main entry point for advancing the game state.
@@ -3493,20 +3506,21 @@ impl BaseGame {
                 .players
                 .iter_mut()
                 .find(|p| p.id == pid)
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("no player {entity}")))?;
+                .ok_or_else(|| crate::pyerr::exceptions::PyValueError::new_err(format!("no player {entity}")))?;
             player.cash += amount;
         } else {
             let sym = entity.strip_prefix("corp:").unwrap_or(entity);
             let &ci = self
                 .corp_idx
                 .get(sym)
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err(format!("no corporation {entity}")))?;
+                .ok_or_else(|| crate::pyerr::exceptions::PyValueError::new_err(format!("no corporation {entity}")))?;
             self.corporations[ci].cash += amount;
         }
         self.bank.cash -= amount;
         Ok(())
     }
 
+    #[cfg(feature = "python")]
     /// Full action history: every action dict processed, in order.
     ///
     /// Mirrors Python `BaseGame.raw_actions` — each entry is the action dict
