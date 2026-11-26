@@ -1355,6 +1355,12 @@ impl BaseGame {
             Some(idx) => idx,
             None => return false,
         };
+        // site_rules: Ruby G1830::Step::BuySellParShares#purchasable_companies
+        // -> Engine::Step::BuySellParShares#actions lists buy_company for
+        // another player's private, so the turn waits for the player.
+        if self.site_rules && self.site_interplayer_purchase_open(player_id, bought) {
+            return true;
+        }
         let player_cash = self.players[player_idx].cash;
         let player_eid = EntityId::player(player_id);
         let current_certs = self.num_certs_internal(player_id);
