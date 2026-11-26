@@ -531,6 +531,9 @@ auctions with 2+ bidders (humans' C&A: $208; gen6's: $271).
   Its stopped first run (.475 +- .046 over 120) agreed. **u1528 is the stronger candidate** (.625 vs .494, a gap of
   about 4 SE), and the better one on weakness 1 (below); u900 is out. Neither is swapped in: the bots stay on gen6
   until the user is happy with the 1830 model as a whole (2026-11-25).
+- **u1528 with its critic retrained on every seat: .740 +- .020** against the live bots (480 games, 2026-11-26;
+  "u1528's critic retrained on every seat" below). The same policy and settings, only the critic changed: +.115 over
+  its own critic's .625.
 
 ### Caleb's openers, played out (2026-11-24, CPU)
 
@@ -688,7 +691,14 @@ The user's go-ahead ("give u1528 a critic trained on every seat, then redo the a
   Loot-and-dump is not fixed. The policy puts .82 on the bad buy and the search follows it. The new critic narrows
   the preferred move's margin from -.056 to -.006, but doesn't flip it. One loot-and-dump position moves the pass
   rate 9 points.
-- **Still to measure**: a searched match against the live bots (480 games) once the critic settles.
+- **Searched against the live bots: .740 +- .020** (fair .50; 480 games, 2026-11-25 17:09 - 11-26 03:33;
+  `/home/revys/longrun/experiments/critic_all_20261125/u1528_ca1600_vs_bots/`, `match.sh`). u1528's policy with critic
+  1600, the same settings as u1528's first match (score head, 400 readouts, mean-Q PUCT 0.05, dedupe, 8 leaves a batch,
+  kept trees, priors at T 1.0 for both sides); only the critic differs. With its own critic u1528 scored .625 +- .022:
+  +.115, about 3.9 SE.
+  - Worth share .549 (was .537). By arrangement AABB .912, BAAB .800, ABBA .750, BBAA .713, BABA .650, ABAB .613. The
+    middle seats gained most: BAAB .388 -> .800, BABA .512 -> .650.
+  - 46 games (9.6%) at the length cap, against 28 (5.8%) with the old critic.
 
 ## Time and GPU estimates
 
