@@ -2452,10 +2452,14 @@ reduced -- which a game on today's site can't reach); and four whole all-bot gam
 site (3 / 4 / 5 / 6 players: 704 / 788 / 662 / 860 moves, 81-152 of them forced), every one finished in Ruby and in our
 engine, no refusal, no disagreement (the first try found Ruby's HomeToken view above).
 
-Served on the dev site only (18xx-next on :9301, `rl18xx-bot-backend-next` on :5014): gpg1867_a4 u600 (beats the
-supervised 1867 model .968 in 4-player 2v2 games), copied to `~/longrun/work/bots/gpg1867_a4_20261122/learner/600.pth`
-with its run's `config.json` (T 0.5). The dev site offers 1867 bot tables (3-6 players, base rules) through its
-`BOT_TITLES`. The production bots (:5004) don't take `--title-policy` until Caleb says so.
+Served first on the dev site (18xx-next on :9301, `rl18xx-bot-backend-next` on :5014), since 2026-11-25 on production
+too (:9292, `rl18xx-bot-backend` on :5004; Caleb's OK): gpg1867_a4 u600 (beats the supervised 1867 model .968 in
+4-player 2v2 games), copied to `~/longrun/work/bots/gpg1867_a4_20261122/learner/600.pth` with its run's `config.json`
+(T 0.5). Both sites offer 1867 bot tables (3-6 players, base rules) through their `BOT_TITLES`. **Since 2026-11-26
+both play u1200** (Caleb's OK; `learner/1200.pth` beside u600, same T): the run's eval chain u600 -> u800 .642 +- .024,
+u800 -> u1000 .542 +- .025, u1000 -> u1200 .612 +- .024 (4-player 2v2, fair .50); the 4-player 1v3 panel mean
+.659 / .697 / .731 at u800 / u1000 / u1200. Switch and rollback: `~/longrun/experiments/bots_1867u1200_20261126/switch.sh
+apply|rollback rl18xx-bot-backend[-next]` (the old command lines read from `/proc` before the switch).
 
 ### Not done / open
 
