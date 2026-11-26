@@ -92,27 +92,64 @@ fn token_places(g: &SiteGame, sym: &str, tokens: &[crate::entities::Token]) -> V
     out
 }
 
-/// The engine's own price of each route of a site `run_routes` (Ruby `Route#revenue` with nothing posted): the
-/// stops the connection chains end at, each at its revenue in the current phase. 1830 has no route bonuses.
+/// The engine's own price of each route of a site `run_routes` (Ruby `Route#revenue` with nothing posted, 1830: the
+/// sum of its stops' revenues in the phase, no bonuses): each stop the route's `nodes` name ("<hex>-<index>" in
+/// Ruby's numbering; both cities of an OO hex count), or, for a route stored without nodes (older games), the hexes
+/// its connection chains end at.
 pub fn price_routes(g: &SiteGame, a: &Value) -> Option<Vec<i32>> {
     let entity = a.get("entity").and_then(Value::as_str)?;
     let routes = a.get("routes").and_then(Value::as_array)?;
     let mut out = Vec::new();
     for r in routes {
+        if let Some(nodes) = r.get("nodes").and_then(Value::as_array).filter(|n| !n.is_empty()) {
+            let mut sum = 0;
+            for n in nodes {
+                sum += node_revenue(g, n.as_str()?)?;
+            }
+            out.push(sum);
+            continue;
+        }
         let conns: Vec<Vec<String>> = r
             .get("connections")
             .and_then(Value::as_array)?
             .iter()
             .map(|c| c.as_array().map(|xs| xs.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default())
             .collect();
-        let hexes = crate::revenue::stop_hexes_from_connections(&conns).ok()?;
+        // a route is a path of chains: a stop inside it ends two chains, a stop at an end one, so a hex ending n
+        // chains is visited ceil(n / 2) times (both cities of an OO hex: "F20-G19-F20")
+        let mut ends: Vec<(String, u32)> = Vec::new();
+        for c in conns.iter().filter(|c| c.len() >= 2) {
+            for h in [&c[0], &c[c.len() - 1]] {
+                match ends.iter_mut().find(|e| &e.0 == h) {
+                    Some(e) => e.1 += 1,
+                    None => ends.push((h.clone(), 1)),
+                }
+            }
+        }
         let mut sum = 0;
-        for h in hexes {
-            sum += crate::revenue::classify_stop(&g.game, &h, entity).ok()?.revenue;
+        for (h, n) in ends {
+            sum += crate::revenue::classify_stop(&g.game, &h, entity).ok()?.revenue * ((n + 1) / 2) as i32;
         }
         out.push(sum);
     }
     Some(out)
+}
+
+/// A stop's revenue in the phase from its node signature "<hex>-<index>" (Ruby's numbering: G19's preprinted cities
+/// swapped). 1830's tiles carry one kind of stop each (cities, towns or an offboard).
+fn node_revenue(g: &SiteGame, sig: &str) -> Option<i32> {
+    let (hex, idx) = sig.rsplit_once('-')?;
+    let idx: usize = idx.parse().ok()?;
+    let h = g.game.hex_ref(hex)?;
+    let tile = &h.tile;
+    if let Some(ob) = tile.offboards.get(idx).or_else(|| tile.offboards.first()) {
+        return Some(ob.phase_revenue(&g.game.phase.tiles));
+    }
+    if !tile.cities.is_empty() {
+        let i = if g.swapped.contains(&hex) && tile.cities.len() == 2 { 1 - idx.min(1) } else { idx };
+        return tile.cities.get(i).map(|c| c.revenue);
+    }
+    tile.towns.get(idx).map(|t| t.revenue)
 }
 
 fn owner_code(e: &EntityId) -> String {
