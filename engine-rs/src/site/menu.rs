@@ -975,13 +975,29 @@ fn ability_uses(g: &mut SiteGame, corp: &str) -> Vec<Value> {
     out
 }
 
+/// Bankruptcy as the site offers it: voluntary bankruptcy is kept for the site's players (X3, Caleb's decision,
+/// 2026-11-26; docs/SITE_ENGINE_RS.md §11.2). The site's hand (living-board `manual.ts` `bankruptRaw`, on Opal) offers
+/// it in Buy Trains to the operating company when Ruby's `round.actions_for` has `bankrupt` (Step::Bankrupt: the
+/// current entity, at every operating step), `Game#can_go_bankrupt?` holds (total_emr_buying_power below
+/// `depot.min_depot_price`) and the active step's `must_buy_train?` isn't `false` -- Opal's `nil` is true in
+/// JavaScript, so a company with no train facing a depot with trains is offered it whether or not it has a route to
+/// run (Game#must_buy_train?'s `route_info&.dig(:route_train_purchase)` is `nil` without one). Ruby's
+/// Step::Bankrupt#process_bankrupt accepts it there (it checks `can_go_bankrupt?` only), and so does engine-rs's
+/// process_action (its Buy Trains guard is the same `can_go_bankrupt_emr`). The bots keep the printed rule: the
+/// shared legal-move enumeration (`legal_action_types`, the factored enumeration) offers `bankrupt` only to a
+/// company that must buy a train; nothing here changes it.
 fn bankrupt_offer(g: &mut SiteGame, corp: &str) -> Option<Value> {
     if !matches!(&g.game.round, Round::Operating(s) if s.step == S::BuyTrain && s.crowded_corps.is_empty()) {
         return None;
     }
     let ci = *g.game.corp_idx.get(corp)?;
     let pid = g.game.corporations[ci].president_id()?;
-    if !g.game.can_go_bankrupt_emr(pid, corp) || !ruby_must_buy(g, corp) {
+    // Game#must_buy_train?'s first two terms (`entity.trains.empty? && !depot.depot_trains.empty?`): the only ones that
+    // can answer `false`
+    if !g.game.corporations[ci].trains.is_empty() || depot_trains(g).is_empty() {
+        return None;
+    }
+    if !g.game.can_go_bankrupt_emr(pid, corp) {
         return None;
     }
     let min = g.game.min_depot_price_for_emr();

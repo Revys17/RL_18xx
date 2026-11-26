@@ -16,6 +16,8 @@ fn fixture(name: &str) -> Value {
         // scratch-stack games of the step-1 verification (their players renamed), cut short: 18 to action 80, 17 to 246
         "programs_exchange_ca" => include_str!("../../site/fixtures/programs_exchange_ca.json"),
         "dh_teleport_no_route" => include_str!("../../site/fixtures/dh_teleport_no_route.json"),
+        // 1830 polish (§11.2): a scratch-stack game of the verification (15, whole, players renamed)
+        "bankrupt_voluntary" => include_str!("../../site/fixtures/bankrupt_voluntary.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -267,4 +269,44 @@ fn d_and_h_teleport_without_a_route_operates_the_company_in_every_mode() {
         assert_eq!((price, g.game.corporations[cpr].share_price.as_ref().map(|p| p.price)), (Some(30), Some(20)));
         assert_eq!(g.game.active_step_type(), "BuyTrain", "site_rules {site_rules}");
     }
+}
+
+#[test]
+fn voluntary_bankruptcy_is_offered_where_the_sites_hand_offers_it() {
+    // 15@597: NYC (no train, no route: Game#must_buy_train? is nil) in Buy Trains with $160, its president with $26;
+    // the cheapest depot train costs $630. The site's hand (Opal) offers bankruptcy (Ruby's nil is true there) and
+    // Ruby accepts it; the printed rule (the bots' enumeration) does not offer it: NYC needn't buy a train.
+    let data = fixture("bankrupt_voluntary");
+    let mut g = SiteGame::load(&cli::truncate(&data, Some(597))).unwrap();
+    g.run_to(None);
+    assert_eq!(g.game.active_step_type(), "BuyTrain");
+    assert!(!g.game.must_buy_train("NYC"));
+    let types = g.game.legal_action_types();
+    assert!(!types.iter().any(|t| t == "bankrupt"), "{types:?}");
+    let m = super::menu::menu(&mut g, 15);
+    // Opal's golden at 15@597 (living-board test/rust/golden.cjs), created_at aside
+    assert_eq!(
+        m["bankrupt"],
+        json!({"action": {"type": "bankrupt", "entity": "NYC", "entity_type": "corporation"}, "player": "Player 3",
+               "corp": "NYC", "min": 630, "power": 246, "minText": "$630", "powerText": "$246",
+               "ends": " The game ends immediately when any player is bankrupt."})
+    );
+    assert!(super::menu::legal_actions(&mut g).as_array().unwrap().iter().any(|a| a["type"] == "bankrupt"));
+    // taken: the engine accepts it (Ruby's process_bankrupt checks can_go_bankrupt? only) and the game ends
+    let (posted, _) = g.act(&m["bankrupt"]["action"]).unwrap();
+    assert_eq!(posted["id"], 598);
+    assert!(g.finished());
+    assert_eq!(g.end_reason(), Some("bankrupt"));
+    // the next position (598: NYC bought ERIE's 5 for $1, so it has a train): nothing offered
+    let mut g = SiteGame::load(&cli::truncate(&data, Some(598))).unwrap();
+    g.run_to(None);
+    assert!(super::menu::menu(&mut g, 15).get("bankrupt").is_none());
+    // the game's own end, 613: B&M, which must buy a train, goes bankrupt (offered under the printed rule too)
+    let mut g = SiteGame::load(&data).unwrap();
+    g.run_to(Some(612));
+    assert!(g.game.legal_action_types().iter().any(|t| t == "bankrupt"));
+    assert!(super::menu::menu(&mut g, 13)["bankrupt"].is_object());
+    g.run_to(None);
+    assert!(g.stopped.is_none(), "{:?}", g.stopped);
+    assert_eq!(g.end_reason(), Some("bankrupt"));
 }
