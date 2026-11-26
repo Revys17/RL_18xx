@@ -300,8 +300,18 @@ fn pass_description(g: &SiteGame) -> Value {
             json!(match s.step {
                 S::LayTile => if s.num_laid_track > 0 { "Done (Track)" } else { "Skip (Track)" },
                 S::PlaceToken => "Skip (Token)",
-                S::BuyTrain => if g.turn_acted_at(None, "BuyTrain") { "Done (Trains)" } else { "Skip (Trains)" },
-                S::BuyCompany => if g.turn_acted_at(Some("buy_company"), "BuyCompany") { "Done (Companies)" } else { "Skip (Companies)" },
+                // Ruby's BuyTrain step acted when it processed a purchase or an emergency sale (a private bought
+                // meanwhile is the BuyCompany step's)
+                S::BuyTrain => {
+                    if g.turn_acted_at(Some("buy_train"), "BuyTrain") || g.turn_acted_at(Some("sell_shares"), "BuyTrain") {
+                        "Done (Trains)"
+                    } else {
+                        "Skip (Trains)"
+                    }
+                }
+                // 1830's OR has two BuyCompany steps; a buy_company is always processed by the first (non-blocking,
+                // never passed), so the blocking one at the end never acted: Ruby's pass_description is "Skip"
+                S::BuyCompany => "Skip (Companies)",
                 _ => "Pass",
             })
         }
@@ -477,7 +487,8 @@ fn share_turn(g: &SiteGame, pid: u32, buy: Value) -> (Value, Value) {
     let Round::Stock(s) = &game.round else { return (Value::Null, json!([])) };
     let mut bought = Vec::new();
     let mut sold = Vec::new();
-    for a in &g.turn_actions {
+    // Ruby's round.current_actions: BuySellParShares's own (a company's exchange is the Exchange step's)
+    for a in g.turn_actions.iter().filter(|a| a.get("entity_type").and_then(Value::as_str) != Some("company")) {
         match a.get("type").and_then(Value::as_str) {
             Some("buy_shares") => bought.push(json!({"corp": share_corp(a), "what": "share"})),
             Some("par") => bought.push(json!({"corp": a.get("corporation"), "what": "par"})),

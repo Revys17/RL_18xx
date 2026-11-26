@@ -29,8 +29,10 @@ pub fn before(g: &SiteGame) -> Before {
     for c in game.auction_companies() {
         bids.insert(c.clone(), game.auction_bids(&c));
     }
-    let bought = g.turn_actions.iter().any(|a| matches!(a.get("type").and_then(Value::as_str), Some("buy_shares" | "par")));
-    let sold = g.turn_actions.iter().any(|a| a.get("type").and_then(Value::as_str) == Some("sell_shares"));
+    // Ruby's round.current_actions: BuySellParShares's own (a company's exchange is the Exchange step's)
+    let own = |a: &&Value| a.get("entity_type").and_then(Value::as_str) != Some("company");
+    let bought = g.turn_actions.iter().filter(own).any(|a| matches!(a.get("type").and_then(Value::as_str), Some("buy_shares" | "par")));
+    let sold = g.turn_actions.iter().filter(own).any(|a| a.get("type").and_then(Value::as_str) == Some("sell_shares"));
     Before { auctioning: game.auctioning_company(), bids, turn_acted: !g.turn_actions.is_empty(), turn_bought: bought, turn_sold: sold, game }
 }
 

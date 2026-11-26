@@ -139,6 +139,10 @@ pub struct SiteGame {
     /// The engine's own price of the routes of the last `run_routes` processed (its action id, each route's
     /// revenue), read on the position before it: the shadow key's `last_action` (§5.3)
     pub last_run_prices: Option<(i64, Vec<i32>)>,
+    /// Engine actions processed so far (moves and their auto actions)
+    pub engine_count: u64,
+    /// The action being processed advanced the round's entity (Ruby next_turn!)
+    turn_advanced: bool,
 }
 
 impl Clone for SiteGame {
@@ -176,6 +180,8 @@ impl Clone for SiteGame {
             site_log: self.site_log,
             log: self.log.clone(),
             last_run_prices: self.last_run_prices.clone(),
+            engine_count: self.engine_count,
+            turn_advanced: self.turn_advanced,
         }
     }
 }
@@ -261,6 +267,8 @@ impl SiteGame {
             site_log: true,
             log: Vec::new(),
             last_run_prices: None,
+            engine_count: 0,
+            turn_advanced: false,
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -304,21 +312,17 @@ impl SiteGame {
             return None;
         }
         let before = self.turn_key();
-        let step_before = self.game.active_step_type();
+        self.turn_advanced = false;
         match self.apply(&a) {
             Ok(()) => {
                 let after = self.turn_key();
                 if (after.0, after.1, after.2) != (before.0, before.1, before.2) {
                     self.round_changed();
                 }
-                if after != before {
+                // Ruby next_turn!: once per action whose processing advanced the round's entity
+                if self.turn_advanced {
                     self.last_turn_start = self.turn_start;
                     self.turn_start = id;
-                    self.turn_actions.clear();
-                    self.turn_steps.clear();
-                } else {
-                    self.turn_actions.push(a.clone());
-                    self.turn_steps.push(step_before);
                 }
                 self.current_action_id = id;
                 self.last_game_action_id = id;
@@ -405,7 +409,23 @@ impl SiteGame {
         let was_finished = self.game.finished;
         // the log's view of the position before (a copy without the map and the records)
         let log_before = self.site_log.then(|| super::log::before(self));
+        let key_before = self.turn_key();
+        let step_before = self.game.active_step_type();
         self.game.process_action_internal(&action)?;
+        self.engine_count += 1;
+        // the turn in progress (Ruby's round.current_actions), move by move, auto actions included: Ruby advances the
+        // round's entity index (next_turn!) also when it comes back round to the same player (the others skipped,
+        // "has no valid actions and passes"), so in a stock round a turn that hasn't acted is a new one
+        let key_after = self.turn_key();
+        let stock_new = matches!(&self.game.round, crate::rounds::Round::Stock(s) if !s.acted_this_turn);
+        if key_after != key_before || stock_new {
+            self.turn_advanced = true;
+            self.turn_actions.clear();
+            self.turn_steps.clear();
+        } else {
+            self.turn_actions.push(a.clone());
+            self.turn_steps.push(step_before);
+        }
         self.site_after(&t, a, &action, before);
         if let Some(b) = log_before {
             let mut lines = super::log::explain(self, &b, a);
