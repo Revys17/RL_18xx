@@ -689,8 +689,10 @@ work; a test-user game with every move kind posted from Rust and accepted, one w
 
 ## 11. Package A as built (2026-11-26)
 
-Branch `site/engine-rs-1830` on origin/master **96689b7** (X2). The neutrality test, unchanged, matched at that base
-before anything was added; it passes at every later commit with `site_rules` off. X3 is Caleb's open choice: nothing
+Branch `site/engine-rs-1830` on origin/master **96689b7** (X2); after the training session's review (U1, §4.6) rebased
+onto **cd97116** (its docs and two `test_value_trainer` fixture fixes: no engine change, no conflicts). The neutrality
+test, unchanged, matched at that base before anything was added; it passes at every later commit with `site_rules`
+off. X3 is Caleb's open choice: nothing
 was added for it, and S/H did not wait for it (§4.3: S2 and H2 touch `operating_step_auto_skips`, which an X3 fix may
 touch too).
 
