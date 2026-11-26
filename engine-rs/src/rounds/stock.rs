@@ -718,6 +718,14 @@ impl BaseGame {
         new_state.acted_this_turn = true;
         new_state.consecutive_passes = 0;
         new_state.priority_deal_player = self.next_player_id(player_id);
+        if self.site_rules {
+            // Ruby Engine::Step::BuySellParShares#process_buy_company:
+            // `@round.current_actions << action` (a purchase: bought? from
+            // here on, PURCHASE_ACTIONS) and no track_action, so
+            // @round.last_to_act -- the priority deal -- doesn't move.
+            new_state.bought_this_turn = true;
+            new_state.priority_deal_player = state.priority_deal_player;
+        }
 
         self.round = crate::rounds::Round::Stock(new_state);
         self.update_round_state();
