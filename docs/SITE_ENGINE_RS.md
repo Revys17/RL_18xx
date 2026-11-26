@@ -669,3 +669,51 @@ work; a test-user game with every move kind posted from Rust and accepted, one w
 - **Upstream Ruby changes** in `lib/engine` (merged from tobymao or the site's own, like 1b5c534 and c57803b) can
   break parity silently: the corpus run (§8) is repeated before each re-pin of `engine-rs/PINNED` and after each
   `lib/engine` change.
+
+---
+
+## 11. Package A as built (2026-11-26)
+
+Branch `site/engine-rs-1830` on origin/master **96689b7** (X2). The neutrality test, unchanged, matched at that base
+before anything was added; it passes at every later commit with `site_rules` off. X3 is Caleb's open choice: nothing
+was added for it, and S/H did not wait for it (§4.3: S2 and H2 touch `operating_step_auto_skips`, which an X3 fix may
+touch too).
+
+**Commits** (oldest first): neutrality test; this doc; **P** (pyo3 optional + `scripts/pre-push.hook`); **V**
+(visibility); **S0** (the two fields); the spike's site layer ported; **S1-S5** and **H1-H4** (one commit each, H in
+one, each `title rule || self.site_rules` / `if self.site_rules`, naming its Ruby method; made right after the port,
+on 96689b7, so every later number includes them); then site-only commits (API 2, the shadow key, the CLI, the build,
+the log, the menu, tests, tools). Outside `src/site` nothing else changed.
+
+**Speed** (`scripts/bench_leaf_costs.py --positions 32`, 5 interleaved runs each, one core, `nice`; µs per leaf,
+median): select+expand 114.4 before (P) / 106.7 after (S0-S5, H); clone a game 54.4 / 50.4; legal-move enumeration
+20.1 / 18.4; free a game 24.5 / 22.4. The "after" runs were faster across the board, the Python-only parts too
+(adapter encode 269 / 248): machine load, not the change; no slowdown is measurable.
+
+**Artifacts** (K2): `$RUST1/pkg/<commit>/` and `pkg/current` (`engine_rs.js` no-modules glue, `engine_rs_bg.wasm`
+1.44 MB / 537 KB gzip, `engine_rs.d.ts`, `BUILD.json`, `site_engine` host build), published by
+`scripts/site_engine/publish.sh`; `engine-rs/site/build-site.sh <out>` (K5) builds the same from a `git archive` of
+the branch with `PINNED` and no git.
+
+**Corpus** (§8.1): :9301 1,041 games (315 distinct), the production export 19 games (read-only bot API, files 600,
+deleted after the checks), the fixtures 14 (Ruby's spec games, RL_18xx's site-format fixtures and test games, the
+advisor's RL streams).
+
+| Check | Result |
+|---|---|
+| Strict replay | :9301 1,041 / 1,041; production 19 / 19; fixtures: the 4 that stop, stop where the site's Ruby stops, with its words |
+| Finished games' result vs the site's | 144 / 144 (:9301), 14 / 14 (production) |
+| Shadow key v1 vs the reference Ruby key (`scripts/site_engine/ruby/keys_reference.rb`, the site's Ruby in a throwaway container) | 147,037 / 147,037 positions (:9301), 11,767 / 11,767 (production), 4,759 / 4,759 (fixtures) |
+| Stored runs vs the engine's own pricing (`last_action`) | 11,643 / 11,643 (:9301), 1,151 / 1,151 (production) |
+| Native vs wasm (`replay_digest`: every step's JSON and key, final snapshot and menus) | 1,057 / 1,057 games equal; two native runs equal |
+| Spike goldens (living-board b8a07d0, 303 games): snapshots, actions, tracks, tile options, auto routes | 78,809 / 78,809; 78,506 / 78,506; 8,966 / 8,966; 9,773 / 9,773; 4,584 equal, never below |
+| StaticInfo's engine part | 303 / 303 (M5 fixed) |
+| Menus | 78,741 / 78,745 before the auction-lock facts (left: 2 bankruptcy offers = X3; 2 singletons: D22 listed by Opal at 10@305, D&H's token at 725@391); the auction lock then differs from these pre-lock goldens at 2,930 positions by design: C's new goldens judge it |
+| Log lines | 166,087 / 166,119 (99.98%; was 98.55%); left: bankrupt sales, D&H teleport skips, a home-token choice's words, one auction position |
+| Act cases (§8.3, K11) | `$RUST1/acts/r1/cases.jsonl`: 315 distinct games, every 10th decision position, tiles every 5th: 76,181 cases, 75,412 accepted, 769 refused (all depot trains the menu lists that the company can't afford) |
+
+**Not done here** (open for A, or for B/C): Rust vs C's new goldens (none in `$RUST1/goldens` yet; `site_replay
+--goldens` takes them as they come); generated games (Rust self-play with `site_rules` replayed by Ruby, §8.1 last
+row); M8 (tile drawings' location / borders: the pack's, C); the two menu singletons; S2's review note: the site's
+menu lists only the player's own companies' trains (Caleb's own-only rule, rl18xx-next CLIENT.md §14), while the
+engine processes cross-player purchases (`site_rules`), so the menu needs no cross-player list.
