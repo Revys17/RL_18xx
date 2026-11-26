@@ -52,3 +52,6 @@ pub fn debug_upgradeable(g: &game::SiteGame, hex: &str) -> (Vec<(String, u8)>, V
     names.sort();
     (g.game.upgradeable_tiles_for(hex), names.into_iter().take(5).collect())
 }
+
+#[cfg(all(test, feature = "site"))]
+mod tests;
