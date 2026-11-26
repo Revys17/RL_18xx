@@ -36,6 +36,8 @@ pub mod revenue;
 pub mod rl;
 pub mod rounds;
 pub mod router;
+/// The site layer (docs/SITE_ENGINE_RS.md): `records` and `rules` in every build, the rest behind `site`.
+pub mod site;
 pub mod steps;
 pub mod tiles;
 pub mod title;

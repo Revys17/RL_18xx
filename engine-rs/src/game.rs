@@ -323,6 +323,15 @@ pub struct BaseGame {
     /// titles with `GameTitle::is_g1822_family()`; every 1822 branch in
     /// shared code keys off it, so 1830/1867 never take them.
     pub(crate) g1822: Option<Box<crate::g1822::G1822State>>,
+    /// Site mode (docs/SITE_ENGINE_RS.md §4.2): the site's house rules where the RL engine deliberately differs
+    /// from Ruby (player-to-player private purchases; train purchases from other players' corporations, and Ruby's
+    /// Buy Trains step staying open while they hold trains). A runtime flag like `no_buyback_rule`, default false,
+    /// set only by the site layer (`src/site`, `SiteGame::load`): never by Python (no setter is exported), the
+    /// generators, `start_positions`, the importer or eval. The legal-move lists keep the RL rule either way.
+    pub(crate) site_rules: bool,
+    /// What the site layer records as a game goes (operating history, player values per round): None unless
+    /// `site_rules` (a search clone copies one null pointer).
+    pub(crate) site: Option<Box<crate::site::records::SiteRecords>>,
 }
 
 // crate-visible wrappers that forward to the (private) PyO3-exposed methods
@@ -618,6 +627,8 @@ impl BaseGame {
             paid_borders: self.paid_borders.clone(),
             pending_force_next_entity: self.pending_force_next_entity,
             g1822: self.g1822.clone(),
+            site_rules: self.site_rules,
+            site: self.site.clone(),
         }
     }
 
@@ -3024,6 +3035,8 @@ impl BaseGame {
             paid_borders: Vec::new(),
             pending_force_next_entity: false,
             g1822: None,
+            site_rules: false,
+            site: None,
         };
         if title.is_g1822_family() {
             game.g1822_setup(seed.unwrap_or(0));
