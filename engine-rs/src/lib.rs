@@ -22,6 +22,9 @@ pub mod gumbel;
 pub mod map;
 pub mod mcts;
 pub mod mcts_lockstep;
+/// Training neutrality: pinned 1830 self-play walks (docs/SITE_ENGINE_RS.md §8.4).
+#[cfg(test)]
+mod neutrality;
 pub mod price_pmf;
 pub mod revenue;
 pub mod rl;
