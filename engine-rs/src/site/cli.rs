@@ -18,8 +18,8 @@ pub fn version() -> Value {
     if cfg!(feature = "wasm") {
         features.push("wasm");
     }
-    if cfg!(feature = "only-1830") {
-        features.push("only-1830");
+    if cfg!(feature = "site-titles") {
+        features.push("site-titles");
     }
     json!({"engine": "engine-rs", "commit": super::COMMIT, "api": super::API_VERSION, "key": super::KEY_VERSION,
            "titles": ["1830"], "features": features})

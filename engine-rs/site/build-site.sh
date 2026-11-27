@@ -4,7 +4,7 @@
 #   site/build-site.sh <out>
 #     <out>/bin/site_engine        native, `--features site` (the server's shadow; the corpus tools)
 #     <out>/pkg/engine_rs.js       wasm-bindgen --target no-modules glue (defines `wasm_bindgen`)
-#     <out>/pkg/engine_rs_bg.wasm  `--features wasm,only-1830`, profile wasm-release, wasm-opt -Oz when available
+#     <out>/pkg/engine_rs_bg.wasm  `--features wasm,site-titles`, profile wasm-release, wasm-opt -Oz when available
 #     <out>/pkg/engine_rs.d.ts     the WasmGame API's types
 #     <out>/pkg/BUILD.json         {engine, commit, api, key, titles, features, built, sizes}
 #
@@ -54,7 +54,7 @@ mkdir -p "$OUT/bin"
 cp "$TARGET_DIR/release/site_engine" "$OUT/bin/site_engine"
 
 "${RUN[@]}" cargo build --profile wasm-release --target wasm32-unknown-unknown --no-default-features \
-  --features wasm,only-1830 --lib
+  --features wasm,site-titles --lib
 rm -rf "$OUT/pkg" && mkdir -p "$OUT/pkg"
 "${RUN[@]}" "$BINDGEN" --target no-modules --out-dir "$OUT/pkg" --out-name engine_rs \
   "$TARGET_DIR/wasm32-unknown-unknown/wasm-release/engine_rs.wasm"
@@ -78,7 +78,7 @@ cat > "$OUT/pkg/BUILD.json" <<JSON
  "api": $API,
  "key": $KEY,
  "titles": ["1830"],
- "features": {"pkg": ["site", "wasm", "only-1830"], "site_engine": ["site"]},
+ "features": {"pkg": ["site", "wasm", "site-titles"], "site_engine": ["site"]},
  "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
  "wasm_bindgen": "$have",
  "sizes": {"engine_rs_bg.wasm": {"raw": $(size "$OUT/pkg/engine_rs_bg.wasm"), "gzip": $(gz "$OUT/pkg/engine_rs_bg.wasm"), "brotli": $(br "$OUT/pkg/engine_rs_bg.wasm")},

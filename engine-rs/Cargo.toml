@@ -33,8 +33,9 @@ extension-module = ["python", "pyo3/extension-module"]
 site = []
 # The site layer as a wasm-bindgen package (src/site/wasm.rs, site/build-site.sh).
 wasm = ["site", "dep:wasm-bindgen"]
-# The registry trimmed to 1830 (the browser's wasm package: site/build-site.sh).
-only-1830 = []
+# The registry trimmed to the titles the site plays on engine-rs, 1830 and 1867 (the browser's wasm package:
+# site/build-site.sh; docs/SITE_ENGINE_RS_1867.md §3.10, P2). It replaces step 1's `only-1830`.
+site-titles = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
