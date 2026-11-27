@@ -809,7 +809,8 @@ cheapest depot train, route or not. engine-rs's processing already accepted it (
   has more than one bid; adapter.ts `auctionedNow`), absent otherwise as on Opal. The client's Rust worker derived it
   itself until now (`steps.ts withAuctioning`, removed in living-board `rust-1830-polish`).
 
-**Commits** (on f6a9fe5): `3446997` site menu: X3; `ce08085` site view: `ending` and `auctioning`; then this doc.
+**Commits** (on f6a9fe5): `3446997` site menu: X3; `ce08085` site view: `ending` and `auctioning`; then this doc
+(after the rebase onto 995ccef, §11.3: ffea71c, 10aaf36, d5deac4).
 Tests: `site::tests::voluntary_bankruptcy_is_offered_where_the_sites_hand_offers_it` (fixture `bankrupt_voluntary`:
 the verification's game 15, players renamed: offered at 597 with Opal's facts, `min` 630, `power` 246; absent from
 `legal_action_types`; accepted, the game ends; not offered at 598 once NYC holds a train; B&M's must-buy bankruptcy
@@ -835,4 +836,20 @@ wasm32-unknown-unknown --no-default-features --features wasm` and the default `c
 **Package** (K2): `build-site.sh` at ce08085: `engine_rs_bg.wasm` 1,486,257 bytes (552,818 gzip), `engine_rs.js`
 22,806, `site_engine` 5,153,968; in the polish's own scratch (`rust2/polish/pkg/ce0808514096`; `$RUST1/pkg/current`
 was left as it was).
+
+### 11.3 Rebased onto origin/master 995ccef (2026-11-27)
+
+For the training session's review and merge, the polish was rebased from f6a9fe5 (step 1, merged) onto RL_18xx
+origin/master **995ccef**: f6a9fe5 plus the training session's docs commit (CLAUDE.md, docs/rl_model.md: the 1867
+bots play gpg1867_a4 u1200 on both sites); no engine change, no conflicts (the polish touches neither file). Every
+commit kept, in order, each patch unchanged (`git patch-id`): §11.2's `3446997` → **ffea71c** (X3), `ce08085` →
+**10aaf36** (`ending`, `auctioning`), its doc `7bcc696` → **d5deac4**; then this note. `site/engine-rs-1867` was
+rebased onto it in turn (SITE_ENGINE_RS_1867.md §13.3).
+
+**Gate** at d5deac4 (`taskset -c 24-31,56-63 nice -n 19`, `CUDA_VISIBLE_DEVICES=`, the worktree's own venv): `cargo
+test --release --no-default-features --features python` 268 passed, 0 failed, 11 ignored (neutrality included);
+`--features site` 287 passed, 0 failed, 10 ignored; `cargo check --target wasm32-unknown-unknown --no-default-features
+--features wasm` and `--features wasm,only-1830` and the default `cargo check`: no errors (only the shared code's
+existing dead-code warnings). The same numbers as at ce08085. The full `pytest tests/` ran on the 1867 head, which
+contains this branch (SITE_ENGINE_RS_1867.md §13.3).
 
