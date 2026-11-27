@@ -27,7 +27,7 @@ fn pent(pid: u32) -> Value {
     json!({"entity": pid, "entity_type": "player"})
 }
 
-fn with(base: Value, extra: Value) -> Value {
+pub(super) fn with(base: Value, extra: Value) -> Value {
     let mut m = base.as_object().cloned().unwrap_or_default();
     if let Value::Object(e) = extra {
         for (k, v) in e {
@@ -37,11 +37,11 @@ fn with(base: Value, extra: Value) -> Value {
     Value::Object(m)
 }
 
-fn player_name(g: &SiteGame, pid: u32) -> String {
+pub(super) fn player_name(g: &SiteGame, pid: u32) -> String {
     g.players.iter().find(|p| p.0 == pid).map(|p| p.1.clone()).unwrap_or_default()
 }
 
-fn company_name(g: &SiteGame, sym: &str) -> String {
+pub(super) fn company_name(g: &SiteGame, sym: &str) -> String {
     g.game.title_def().companies().iter().find(|c| c.sym == sym).map(|c| c.name.to_string()).unwrap_or_default()
 }
 
@@ -162,6 +162,9 @@ fn open_types(g: &mut SiteGame) -> Vec<String> {
 }
 
 pub fn menu(g: &mut SiteGame, pid: u32) -> Value {
+    if g.game.title == "1867" {
+        return super::g1867::menu::menu(g, pid);
+    }
     if g.finished() || !super::view::active_players(g).contains(&pid) {
         return Value::Null;
     }
@@ -384,7 +387,7 @@ fn bundle_share_ids(g: &SiteGame, pid: u32, corp: &str, num: usize) -> Vec<Strin
     shares.iter().take(num).map(|s| format!("{}_{}", corp, s.index)).collect()
 }
 
-fn sell_options(g: &SiteGame, pid: u32) -> Value {
+pub(super) fn sell_options(g: &SiteGame, pid: u32) -> Value {
     let mut out = Vec::new();
     let corp_pos = |s: &str| g.game.corporations.iter().position(|c| c.sym == s).unwrap_or(99);
     let mut list = g.game.sellable_bundles(pid);
@@ -406,7 +409,7 @@ fn sell_options(g: &SiteGame, pid: u32) -> Value {
 }
 
 /// What a sale does, by processing it on a clone: the price and cell after, the player's percent left, the presidency.
-fn sale_preview(g: &SiteGame, pid: u32, corp: &str, pct: u8, action: &Value) -> Value {
+pub(super) fn sale_preview(g: &SiteGame, pid: u32, corp: &str, pct: u8, action: &Value) -> Value {
     let Some(c) = g.game.corporations.iter().find(|c| c.sym == corp) else { return Value::Null };
     let Some(sp) = c.share_price.clone() else { return Value::Null };
     let me = EntityId::player(pid);
@@ -494,7 +497,7 @@ fn par_options(g: &SiteGame, pid: u32) -> Value {
 }
 
 /// The stock turn so far and every share on the table that isn't offered, with the checks that fail.
-fn share_turn(g: &SiteGame, pid: u32, buy: Value) -> (Value, Value) {
+pub(super) fn share_turn(g: &SiteGame, pid: u32, buy: Value) -> (Value, Value) {
     let game = &g.game;
     let Round::Stock(s) = &game.round else { return (Value::Null, json!([])) };
     let mut bought = Vec::new();
@@ -547,7 +550,9 @@ fn share_turn(g: &SiteGame, pid: u32, buy: Value) -> (Value, Value) {
         }
         let mut cands: Vec<(&str, i32)> = Vec::new();
         if c.shares.iter().any(|sh| !sh.president && !sh.owner.is_player() && !sh.owner.is_market()) {
-            cands.push(("IPO", c.ipo_price.as_ref().map_or(0, |p| p.price)));
+            // (a company always_market_price, 1867's, sells its treasury shares at the market price)
+            let ipo = if c.always_market_price { c.share_price.as_ref() } else { c.ipo_price.as_ref() };
+            cands.push(("IPO", ipo.map_or(0, |p| p.price)));
         }
         if c.shares.iter().any(|sh| sh.owner.is_market()) {
             cands.push(("market", c.share_price.as_ref().map_or(0, |p| p.price)));
@@ -661,7 +666,7 @@ fn holding_ok(c: &crate::entities::Corporation, pid: u32) -> bool {
         || c.share_price.as_ref().is_some_and(|p| p.types.iter().any(|t| t == "unlimited" || t == "multiple_buy"))
 }
 
-fn terrain_of(g: &SiteGame, hex: &str) -> (i32, Vec<String>) {
+pub(super) fn terrain_of(g: &SiteGame, hex: &str) -> (i32, Vec<String>) {
     let Some(h) = g.game.hex_ref(hex) else { return (0, vec![]) };
     let mut cost = 0;
     let mut terrain: Vec<String> = Vec::new();
@@ -1061,6 +1066,9 @@ fn exchange_offers(g: &SiteGame, pid: u32) -> Vec<Value> {
 
 /// Every tile the engine allows on a hex, in every legal rotation: [{tile, name, color, rotation, cost, terrain, action}].
 pub fn tile_options(g: &mut SiteGame, hex: &str, via: Option<&str>) -> Result<Value, String> {
+    if g.game.title == "1867" {
+        return super::g1867::menu::tile_options(g, hex);
+    }
     let entity = match via {
         Some(c) => json!({"entity": c, "entity_type": "company"}),
         None => match g.game.round_state.active_entity_id.corp_sym() {
@@ -1111,6 +1119,9 @@ pub fn tile_options(g: &mut SiteGame, hex: &str, via: Option<&str>) -> Result<Va
 /// The auto-router's best run for the acting company: {action (run_routes as the site posts it), revenue, routes
 /// (each with its track)}, or null.
 pub fn auto_route(g: &mut SiteGame) -> Value {
+    if g.game.title == "1867" {
+        return super::g1867::menu::auto_route(g);
+    }
     let Some(corp) = g.game.round_state.active_entity_id.corp_sym().map(str::to_string) else { return Value::Null };
     if !matches!(&g.game.round, Round::Operating(s) if s.step == S::RunRoutes) {
         return Value::Null;

@@ -174,6 +174,10 @@ pub fn ruby_actions(game: &mut BaseGame) -> Vec<String> {
 /// Ruby's list of a step's actions where the engine's differs: the order, and the steps whose Ruby `actions` is all or
 /// nothing while the engine lists only what is possible (the engine's step blocks either way, so Ruby's is the whole
 /// list whenever it is the active step).
+pub fn ruby_order_of(kind: StepKind, types: Vec<String>) -> Vec<String> {
+    ruby_order(kind, types)
+}
+
 fn ruby_order(kind: StepKind, mut types: Vec<String>) -> Vec<String> {
     let fixed: Option<&[&str]> = match kind {
         // Engine::Step::Track#actions: ACTIONS unless !can_lay_tile? (a lay left this turn, its cost within the buying
@@ -261,4 +265,16 @@ impl MergerRecord {
             self.last_converted = s.converted.clone();
         }
     }
+}
+
+/// The generator's moves now as wire dicts with their price ranges (debugging: `site_replay --dump`).
+pub fn debug_moves(g: &mut SiteGame) -> Vec<serde_json::Value> {
+    if !is_1867(g) {
+        return Vec::new();
+    }
+    let moves = g.game.g1867_legal_moves_with(crate::title::CrossPlayerPolicy::RULES);
+    moves
+        .iter()
+        .map(|m| serde_json::json!({"wire": g.game.g1867_move_wire(m), "range": m.price.map(|r| [r.lo, r.hi, r.step]), "step": format!("{:?}", m.step)}))
+        .collect()
 }

@@ -237,7 +237,8 @@ fn main() {
             }
             let snap = engine_rs::site::view::snapshot(&g, g.current_action_id);
             let key = engine_rs::site::shadow::key_now(&mut g);
-            println!("{}", json!({"snap": snap, "menus": menus, "key": key, "info": engine_rs::site::view::static_info(&g)}));
+            let moves = engine_rs::site::g1867::debug_moves(&mut g);
+            println!("{}", json!({"snap": snap, "menus": menus, "key": key, "info": engine_rs::site::view::static_info(&g), "moves": moves}));
             continue;
         }
         let golden = goldens.as_ref().and_then(|d| {
