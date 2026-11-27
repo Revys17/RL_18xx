@@ -120,8 +120,637 @@ pub const TILE_RESERVATION_BLOCKING: usize = usize::MAX - 1;
 // Core graph computation
 // ---------------------------------------------------------------------------
 
-/// Compute connectivity graph for a single corporation.
+/// Compute connectivity graph for a single corporation: the walk on flat arrays (§11.3), equal to
+/// `compute_corp_graph_reference` by construction (and checked against it on every call in tests).
 fn compute_corp_graph(
+    corp_sym: &str,
+    hexes: &[Hex],
+    hex_idx: &HashMap<String, usize>,
+    hex_adjacency: &HashMap<String, HashMap<u8, String>>,
+    corp_token_hexes: &[(String, usize)],
+    reservations: &[(String, usize, String)],
+) -> CorpGraph {
+    let graph = compute_corp_graph_flat(corp_sym, hexes, hex_idx, hex_adjacency, corp_token_hexes, reservations);
+    #[cfg(test)]
+    if graph_cross_check() {
+        let reference = compute_corp_graph_reference(corp_sym, hexes, hex_idx, hex_adjacency, corp_token_hexes, reservations);
+        assert_same_graph(&graph, &reference, corp_sym);
+    }
+    graph
+}
+
+fn compute_corp_graph_flat(
+    corp_sym: &str,
+    hexes: &[Hex],
+    hex_idx: &HashMap<String, usize>,
+    hex_adjacency: &HashMap<String, HashMap<u8, String>>,
+    corp_token_hexes: &[(String, usize)],
+    reservations: &[(String, usize, String)],
+) -> CorpGraph {
+    // a token on a hex the board doesn't index (never on a real board): the reference walk
+    if corp_token_hexes.iter().any(|(h, _)| !hex_idx.contains_key(h)) {
+        return compute_corp_graph_reference(corp_sym, hexes, hex_idx, hex_adjacency, corp_token_hexes, reservations);
+    }
+    let ctx = FlatCtx::new(hexes, hex_idx, hex_adjacency, corp_sym, corp_token_hexes);
+    let n_nodes = ctx.n_nodes();
+    let words = n_nodes.div_ceil(64).max(1);
+    let token_nodes: Vec<(usize, usize)> = corp_token_hexes
+        .iter()
+        .map(|(h, ci)| {
+            let hi = hex_idx[h];
+            (hi, ctx.node(hi, &PathEndpoint::City(*ci)))
+        })
+        .collect();
+    let mut all_nodes = vec![0u64; words];
+    let mut all_hexes = vec![0u8; hexes.len()];
+    let mut route_available = false;
+    let mut route_train_purchase = false;
+    let mut w = FlatWalk::new(&ctx);
+    let mut pre_seed = vec![0u64; words];
+    for (k, (token_hex_id, city_index)) in corp_token_hexes.iter().enumerate() {
+        let (hi, start) = token_nodes[k];
+        // a fresh walk, its visited nodes pre-seeded with the other token cities
+        w.visited_paths.iter_mut().for_each(|x| *x = 0);
+        w.edge_counter.iter_mut().for_each(|x| *x = 0);
+        w.visited_nodes.iter_mut().for_each(|x| *x = 0);
+        w.result_nodes.iter_mut().for_each(|x| *x = 0);
+        w.hexes.iter_mut().for_each(|x| *x = 0);
+        pre_seed.iter_mut().for_each(|x| *x = 0);
+        for (j, (h, ci)) in corp_token_hexes.iter().enumerate() {
+            if h != token_hex_id || *ci != *city_index {
+                bit_set(&mut pre_seed, token_nodes[j].1);
+                bit_set(&mut w.visited_nodes, token_nodes[j].1);
+            }
+        }
+        walk_from_node(&ctx, &mut w, hi, start, false, false);
+
+        if !route_available {
+            let mut has_optional = false;
+            let mut reached_other_token = false;
+            let mut other_mandatory = false;
+            for word in 0..words {
+                let mut found = w.visited_nodes[word] | w.result_nodes[word];
+                while found != 0 {
+                    let n = word * 64 + found.trailing_zeros() as usize;
+                    found &= found - 1;
+                    let seeded = bit_get(&pre_seed, n);
+                    let hex_seen = all_present(&w.hexes, ctx.node_hex[n] as usize);
+                    if n != start && !seeded {
+                        has_optional = true;
+                    }
+                    if seeded && hex_seen {
+                        reached_other_token = true;
+                    }
+                    if n != start && (!seeded || hex_seen) {
+                        other_mandatory = true;
+                    }
+                }
+            }
+            if has_optional || reached_other_token {
+                route_available = true;
+            }
+            if !route_train_purchase && other_mandatory {
+                route_train_purchase = true;
+            }
+        }
+
+        for word in 0..words {
+            all_nodes[word] |= w.visited_nodes[word] | w.result_nodes[word];
+        }
+        for (a, b) in all_hexes.iter_mut().zip(&w.hexes) {
+            *a |= *b;
+        }
+    }
+
+    let mut visited_nodes: HashSet<NodeId> = HashSet::new();
+    for word in 0..words {
+        let mut bits = all_nodes[word];
+        while bits != 0 {
+            let n = word * 64 + bits.trailing_zeros() as usize;
+            bits &= bits - 1;
+            visited_nodes.insert(ctx.node_id(n));
+        }
+    }
+    let mut visited_hexes: HashMap<String, HashSet<u8>> = HashMap::new();
+    for (hi, &m) in all_hexes.iter().enumerate() {
+        if m & HEX_PRESENT != 0 {
+            visited_hexes.insert(hexes[hi].id.clone(), (0..6u8).filter(|e| m & (1 << e) != 0).collect());
+        }
+    }
+    let tokenable = tokenable_cities_of(corp_sym, hexes, hex_idx, corp_token_hexes, reservations, &visited_nodes);
+    CorpGraph {
+        connected_hexes: visited_hexes,
+        connected_nodes: visited_nodes,
+        tokenable_cities: tokenable,
+        route_available,
+        route_train_purchase,
+    }
+}
+
+#[inline]
+fn all_present(hexes: &[u8], hi: usize) -> bool {
+    hexes[hi] & HEX_PRESENT != 0
+}
+
+/// Tests compare the flat walk with the reference on every computation (`GRAPH_CROSS_CHECK=0` turns it off).
+#[cfg(test)]
+fn graph_cross_check() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("GRAPH_CROSS_CHECK").map_or(true, |v| v != "0"))
+}
+
+#[cfg(test)]
+pub(crate) static GRAPH_CROSS_CHECKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(test)]
+fn assert_same_graph(a: &CorpGraph, b: &CorpGraph, corp_sym: &str) {
+    GRAPH_CROSS_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let toks = |g: &CorpGraph| g.tokenable_cities.iter().map(|t| (t.hex_id.clone(), t.city_index)).collect::<Vec<_>>();
+    assert_eq!(a.connected_hexes, b.connected_hexes, "{corp_sym}: connected_hexes");
+    assert_eq!(a.connected_nodes, b.connected_nodes, "{corp_sym}: connected_nodes");
+    assert_eq!(toks(a), toks(b), "{corp_sym}: tokenable_cities");
+    assert_eq!((a.route_available, a.route_train_purchase), (b.route_available, b.route_train_purchase), "{corp_sym}: routes");
+}
+
+/// Check if an edge on a tile has more than one path using it (converging exit).
+/// When true, paths walked through this edge should be temporarily visited
+/// (removed from visited_paths after the recursive walk completes).
+fn is_converging_exit(tile: &Tile, edge: u8) -> bool {
+    // An edge is "converging" when multiple edge-to-edge paths share it.
+    // City/town-to-edge paths don't count — they represent a single route
+    // through the city, not a crossover.
+    let edge_ep = PathEndpoint::Edge(edge);
+    let count = tile
+        .paths
+        .iter()
+        .filter(|p| {
+            !p.terminal
+                && (p.a == edge_ep || p.b == edge_ep)
+                && p.a.edge_num().is_some()
+                && p.b.edge_num().is_some()
+        })
+        .count();
+    count > 1
+}
+
+// ---------------------------------------------------------------------------
+// The walk on flat arrays (docs/SITE_ENGINE_RS_STEP3.md §11.3)
+// ---------------------------------------------------------------------------
+//
+// The same recursion as `compute_corp_graph_reference` / `walk_from_node_reference` / `walk_into_hex_reference`
+// below (the walk as it was, kept verbatim: the fallback and the differential check), on integer state: hexes by
+// index, the neighbour across each edge looked up once, nodes by number, visited paths as a bitmask per hex, the edge
+// counter per hex side, visited / result nodes as bitsets, visited hexes as present + an edge mask. Every decision
+// reads the same facts in the same order (`tile.paths` order; `is_converging_exit` and `is_city_blocked` precomputed
+// per call, pure functions of the tile and the company), so the result is the same; only the containers changed:
+// the String-keyed hash sets allocated and hashed on every step were most of the walk's time.
+
+/// The walk's flat context for one company.
+struct FlatCtx<'a> {
+    hexes: &'a [Hex],
+    /// The neighbour hex index across each edge (`hex_adjacency`, then `hex_idx`), per hex.
+    nbr: Vec<[u32; 6]>,
+    /// Bit e: `is_converging_exit(tile, e)`, per hex.
+    converging: Vec<u8>,
+    /// Per hex: its first node number and its numbers of city, town and offboard nodes (each at least the tile's
+    /// count and every index its paths or the company's tokens name).
+    node_base: Vec<u32>,
+    counts: Vec<[u32; 3]>,
+    /// Per node number: a city that blocks the company (`is_city_blocked`); its hex.
+    blocked: Vec<bool>,
+    node_hex: Vec<u32>,
+    /// Words of the visited-paths bitmask per hex.
+    path_words: usize,
+}
+
+const NO_NBR: u32 = u32::MAX;
+
+impl<'a> FlatCtx<'a> {
+    fn new(
+        hexes: &'a [Hex],
+        hex_idx: &HashMap<String, usize>,
+        hex_adjacency: &HashMap<String, HashMap<u8, String>>,
+        corp_sym: &str,
+        corp_token_hexes: &[(String, usize)],
+    ) -> Self {
+        let n = hexes.len();
+        let mut nbr = vec![[NO_NBR; 6]; n];
+        let mut converging = vec![0u8; n];
+        let mut node_base = Vec::with_capacity(n + 1);
+        let mut counts = Vec::with_capacity(n);
+        let mut max_paths = 1usize;
+        let mut total = 0u32;
+        for (hi, hex) in hexes.iter().enumerate() {
+            let tile = &hex.tile;
+            max_paths = max_paths.max(tile.paths.len());
+            let mut c = [tile.cities.len() as u32, tile.towns.len() as u32, tile.offboards.len() as u32];
+            for p in &tile.paths {
+                for ep in [&p.a, &p.b] {
+                    match ep {
+                        PathEndpoint::City(i) => c[0] = c[0].max(*i as u32 + 1),
+                        PathEndpoint::Town(i) => c[1] = c[1].max(*i as u32 + 1),
+                        PathEndpoint::Offboard(i) => c[2] = c[2].max(*i as u32 + 1),
+                        _ => {}
+                    }
+                }
+            }
+            for (h, ci) in corp_token_hexes {
+                if *h == hex.id {
+                    c[0] = c[0].max(*ci as u32 + 1);
+                }
+            }
+            if let Some(adj) = hex_adjacency.get(&hex.id) {
+                for (&e, nb) in adj {
+                    if e < 6 {
+                        if let Some(&x) = hex_idx.get(nb) {
+                            nbr[hi][e as usize] = x as u32;
+                        }
+                    }
+                }
+            }
+            for e in 0..6u8 {
+                if is_converging_exit(tile, e) {
+                    converging[hi] |= 1 << e;
+                }
+            }
+            node_base.push(total);
+            counts.push(c);
+            total += c[0] + c[1] + c[2];
+        }
+        node_base.push(total);
+        let mut blocked = vec![false; total as usize];
+        let mut node_hex = vec![0u32; total as usize];
+        for (hi, hex) in hexes.iter().enumerate() {
+            for ci in 0..counts[hi][0] as usize {
+                blocked[node_base[hi] as usize + ci] = is_city_blocked(hexes, hex_idx, &hex.id, ci, corp_sym);
+            }
+            for n in node_base[hi]..node_base[hi + 1] {
+                node_hex[n as usize] = hi as u32;
+            }
+        }
+        FlatCtx { hexes, nbr, converging, node_base, counts, blocked, node_hex, path_words: max_paths.div_ceil(64) }
+    }
+
+    fn n_nodes(&self) -> usize {
+        *self.node_base.last().unwrap_or(&0) as usize
+    }
+
+    /// The node number of a node endpoint of hex `hi`.
+    #[inline]
+    fn node(&self, hi: usize, ep: &PathEndpoint) -> usize {
+        let base = self.node_base[hi] as usize;
+        let c = &self.counts[hi];
+        match ep {
+            PathEndpoint::City(i) => base + i,
+            PathEndpoint::Town(i) => base + c[0] as usize + i,
+            PathEndpoint::Offboard(i) => base + (c[0] + c[1]) as usize + i,
+            _ => usize::MAX,
+        }
+    }
+
+    /// A node number back as the walk's `NodeId`.
+    fn node_id(&self, n: usize) -> NodeId {
+        let hi = self.node_hex[n] as usize;
+        let off = n as u32 - self.node_base[hi];
+        let c = &self.counts[hi];
+        let (node_type, index) = if off < c[0] {
+            (NodeType::City, off)
+        } else if off < c[0] + c[1] {
+            (NodeType::Town, off - c[0])
+        } else {
+            (NodeType::Offboard, off - c[0] - c[1])
+        };
+        NodeId { hex_id: self.hexes[hi].id.clone(), node_type, index: index as usize }
+    }
+}
+
+/// One token walk's state, flat.
+struct FlatWalk {
+    visited_paths: Vec<u64>,
+    edge_counter: Vec<u32>,
+    visited_nodes: Vec<u64>,
+    result_nodes: Vec<u64>,
+    /// Bit 6: the hex is in `visited_hexes`; bits 0-5: its edges.
+    hexes: Vec<u8>,
+}
+
+const HEX_PRESENT: u8 = 1 << 6;
+
+#[inline]
+fn bit_get(v: &[u64], i: usize) -> bool {
+    v[i >> 6] & (1u64 << (i & 63)) != 0
+}
+#[inline]
+fn bit_set(v: &mut [u64], i: usize) {
+    v[i >> 6] |= 1u64 << (i & 63);
+}
+#[inline]
+fn bit_clear(v: &mut [u64], i: usize) {
+    v[i >> 6] &= !(1u64 << (i & 63));
+}
+
+impl FlatWalk {
+    fn new(ctx: &FlatCtx) -> Self {
+        let n = ctx.hexes.len();
+        let words = ctx.n_nodes().div_ceil(64).max(1);
+        FlatWalk {
+            visited_paths: vec![0; n * ctx.path_words],
+            edge_counter: vec![0; n * 6],
+            visited_nodes: vec![0; words],
+            result_nodes: vec![0; words],
+            hexes: vec![0; n],
+        }
+    }
+    #[inline]
+    fn path_visited(&self, ctx: &FlatCtx, hi: usize, pi: usize) -> bool {
+        bit_get(&self.visited_paths, hi * ctx.path_words * 64 + pi)
+    }
+    #[inline]
+    fn set_path(&mut self, ctx: &FlatCtx, hi: usize, pi: usize) {
+        bit_set(&mut self.visited_paths, hi * ctx.path_words * 64 + pi);
+    }
+    #[inline]
+    fn clear_path(&mut self, ctx: &FlatCtx, hi: usize, pi: usize) {
+        bit_clear(&mut self.visited_paths, hi * ctx.path_words * 64 + pi);
+    }
+}
+
+/// `walk_from_node_reference` on the flat state.
+fn walk_from_node(ctx: &FlatCtx, w: &mut FlatWalk, hi: usize, node: usize, converging: bool, converging_path: bool) {
+    if bit_get(&w.visited_nodes, node) {
+        return;
+    }
+    bit_set(&mut w.visited_nodes, node);
+    bit_set(&mut w.result_nodes, node);
+    w.hexes[hi] |= HEX_PRESENT;
+    let tile = &ctx.hexes[hi].tile;
+    let node_endpoint = {
+        let base = ctx.node_base[hi] as usize;
+        let c = &ctx.counts[hi];
+        let off = node - base;
+        if off < c[0] as usize {
+            PathEndpoint::City(off)
+        } else if off < (c[0] + c[1]) as usize {
+            PathEndpoint::Town(off - c[0] as usize)
+        } else {
+            PathEndpoint::Offboard(off - (c[0] + c[1]) as usize)
+        }
+    };
+    for (path_idx, path) in tile.paths.iter().enumerate() {
+        if path.terminal {
+            continue;
+        }
+        if w.path_visited(ctx, hi, path_idx) {
+            continue;
+        }
+        let exit = if path.a == node_endpoint {
+            &path.b
+        } else if path.b == node_endpoint {
+            &path.a
+        } else {
+            continue;
+        };
+        w.set_path(ctx, hi, path_idx);
+        match exit {
+            PathEndpoint::Edge(exit_edge) => {
+                w.hexes[hi] |= HEX_PRESENT | (1 << exit_edge);
+                let next_converging = converging || ctx.converging[hi] & (1 << exit_edge) != 0;
+                let nb = ctx.nbr[hi][*exit_edge as usize];
+                if nb != NO_NBR {
+                    let k = hi * 6 + *exit_edge as usize;
+                    if w.edge_counter[k] == 0 {
+                        w.edge_counter[k] += 1;
+                        walk_into_hex(ctx, w, nb as usize, (*exit_edge + 3) % 6, next_converging);
+                        w.edge_counter[k] -= 1;
+                    }
+                }
+            }
+            PathEndpoint::City(idx) => {
+                let dest = ctx.node(hi, &PathEndpoint::City(*idx));
+                if !ctx.blocked[dest] {
+                    walk_from_node(ctx, w, hi, dest, converging, converging_path || converging);
+                }
+            }
+            PathEndpoint::Town(idx) => {
+                let dest = ctx.node(hi, &PathEndpoint::Town(*idx));
+                walk_from_node(ctx, w, hi, dest, converging, converging_path || converging);
+            }
+            PathEndpoint::Offboard(idx) => {
+                let dest = ctx.node(hi, &PathEndpoint::Offboard(*idx));
+                bit_set(&mut w.result_nodes, dest);
+                bit_set(&mut w.visited_nodes, dest);
+            }
+            PathEndpoint::Junction => {
+                for (other_idx, other_path) in tile.paths.iter().enumerate() {
+                    if other_idx == path_idx || other_path.terminal {
+                        continue;
+                    }
+                    if w.path_visited(ctx, hi, other_idx) {
+                        continue;
+                    }
+                    let has_junction = other_path.a == PathEndpoint::Junction || other_path.b == PathEndpoint::Junction;
+                    if !has_junction {
+                        continue;
+                    }
+                    let other_exit = if other_path.a == PathEndpoint::Junction { &other_path.b } else { &other_path.a };
+                    if let PathEndpoint::Edge(e) = other_exit {
+                        w.set_path(ctx, hi, other_idx);
+                        let next_converging = converging || ctx.converging[hi] & (1 << e) != 0;
+                        w.hexes[hi] |= HEX_PRESENT | (1 << e);
+                        let nb = ctx.nbr[hi][*e as usize];
+                        if nb != NO_NBR {
+                            let k = hi * 6 + *e as usize;
+                            if w.edge_counter[k] == 0 {
+                                w.edge_counter[k] += 1;
+                                walk_into_hex(ctx, w, nb as usize, (*e + 3) % 6, next_converging);
+                                w.edge_counter[k] -= 1;
+                            }
+                        }
+                        if converging {
+                            w.clear_path(ctx, hi, other_idx);
+                        }
+                    }
+                }
+            }
+        }
+        if converging {
+            w.clear_path(ctx, hi, path_idx);
+        }
+    }
+    if converging_path {
+        bit_clear(&mut w.visited_nodes, node);
+    }
+}
+
+/// `walk_into_hex_reference` on the flat state.
+fn walk_into_hex(ctx: &FlatCtx, w: &mut FlatWalk, hi: usize, enter_edge: u8, converging: bool) {
+    let tile = &ctx.hexes[hi].tile;
+    let enter_ep = PathEndpoint::Edge(enter_edge);
+    for (path_idx, path) in tile.paths.iter().enumerate() {
+        if path.terminal {
+            continue;
+        }
+        let in_stack = |e: Option<u8>| e.is_some_and(|e| w.edge_counter[hi * 6 + e as usize] > 0);
+        if in_stack(path.a.edge_num()) || in_stack(path.b.edge_num()) {
+            continue;
+        }
+        if w.path_visited(ctx, hi, path_idx) {
+            continue;
+        }
+        let dest = if path.a == enter_ep {
+            &path.b
+        } else if path.b == enter_ep {
+            &path.a
+        } else {
+            continue;
+        };
+        w.hexes[hi] |= HEX_PRESENT | (1 << enter_edge);
+        w.set_path(ctx, hi, path_idx);
+        match dest {
+            PathEndpoint::Edge(exit_edge) => {
+                w.hexes[hi] |= HEX_PRESENT | (1 << exit_edge);
+                let next_converging = converging || ctx.converging[hi] & (1 << exit_edge) != 0;
+                let nb = ctx.nbr[hi][*exit_edge as usize];
+                if nb != NO_NBR {
+                    let k = hi * 6 + *exit_edge as usize;
+                    if w.edge_counter[k] == 0 {
+                        w.edge_counter[k] += 1;
+                        walk_into_hex(ctx, w, nb as usize, (*exit_edge + 3) % 6, next_converging);
+                        w.edge_counter[k] -= 1;
+                    }
+                }
+            }
+            PathEndpoint::City(idx) => {
+                let node = ctx.node(hi, &PathEndpoint::City(*idx));
+                if !ctx.blocked[node] {
+                    walk_from_node(ctx, w, hi, node, converging, converging);
+                } else {
+                    bit_set(&mut w.result_nodes, node);
+                    bit_set(&mut w.visited_nodes, node);
+                }
+            }
+            PathEndpoint::Town(idx) => {
+                let node = ctx.node(hi, &PathEndpoint::Town(*idx));
+                walk_from_node(ctx, w, hi, node, converging, converging);
+            }
+            PathEndpoint::Offboard(idx) => {
+                let node = ctx.node(hi, &PathEndpoint::Offboard(*idx));
+                bit_set(&mut w.result_nodes, node);
+                bit_set(&mut w.visited_nodes, node);
+            }
+            PathEndpoint::Junction => {
+                for (other_idx, other_path) in tile.paths.iter().enumerate() {
+                    if other_idx == path_idx || other_path.terminal {
+                        continue;
+                    }
+                    if w.path_visited(ctx, hi, other_idx) {
+                        continue;
+                    }
+                    let has_junction = other_path.a == PathEndpoint::Junction || other_path.b == PathEndpoint::Junction;
+                    if !has_junction {
+                        continue;
+                    }
+                    let other_exit = if other_path.a == PathEndpoint::Junction { &other_path.b } else { &other_path.a };
+                    if let PathEndpoint::Edge(e) = other_exit {
+                        if *e == enter_edge {
+                            continue;
+                        }
+                        w.set_path(ctx, hi, other_idx);
+                        let next_converging = converging || ctx.converging[hi] & (1 << e) != 0;
+                        w.hexes[hi] |= HEX_PRESENT | (1 << e);
+                        let nb = ctx.nbr[hi][*e as usize];
+                        if nb != NO_NBR {
+                            let k = hi * 6 + *e as usize;
+                            if w.edge_counter[k] == 0 {
+                                w.edge_counter[k] += 1;
+                                walk_into_hex(ctx, w, nb as usize, (*e + 3) % 6, next_converging);
+                                w.edge_counter[k] -= 1;
+                            }
+                        }
+                        if converging {
+                            w.clear_path(ctx, hi, other_idx);
+                        }
+                    }
+                }
+            }
+        }
+        if converging {
+            w.clear_path(ctx, hi, path_idx);
+        }
+    }
+}
+
+/// The cities a company may token among the nodes it reaches (`compute_corp_graph`'s rule: an open slot, no token of
+/// its in the hex, the reservations), sorted by hex id and city.
+fn tokenable_cities_of(
+    corp_sym: &str,
+    hexes: &[Hex],
+    hex_idx: &HashMap<String, usize>,
+    corp_token_hexes: &[(String, usize)],
+    reservations: &[(String, usize, String)],
+    visited_nodes: &HashSet<NodeId>,
+) -> Vec<TokenableCity> {
+    let mut tokenable = Vec::new();
+    for node in visited_nodes {
+        if node.node_type != NodeType::City {
+            continue;
+        }
+        if corp_token_hexes.iter().any(|(h, ci)| h == &node.hex_id && *ci == node.index) {
+            continue;
+        }
+        if let Some(&hi) = hex_idx.get(&node.hex_id) {
+            let city = &hexes[hi].tile.cities[node.index];
+            if city.tokens.iter().any(|t| t.is_none()) {
+                let corp_already_in_hex = hexes[hi]
+                    .tile
+                    .cities
+                    .iter()
+                    .any(|c| c.tokens.iter().any(|t| t.as_ref().is_some_and(|tok| tok.corporation_id == corp_sym)));
+                if !corp_already_in_hex {
+                    let tile_level_blocking = reservations
+                        .iter()
+                        .any(|(rh, rc, rsym)| rh == &node.hex_id && *rc == TILE_RESERVATION_BLOCKING && rsym != corp_sym);
+                    let tile_level_other =
+                        reservations.iter().any(|(rh, rc, rsym)| rh == &node.hex_id && *rc == TILE_RESERVATION && rsym != corp_sym);
+                    let num_cities = hexes[hi].tile.cities.len();
+                    let blocked = if tile_level_blocking || (tile_level_other && num_cities <= 1) {
+                        true
+                    } else if tile_level_other {
+                        let total_slots: usize = hexes[hi].tile.cities.iter().map(|c| c.tokens.len()).sum();
+                        let total_tokens: usize =
+                            hexes[hi].tile.cities.iter().map(|c| c.tokens.iter().filter(|t| t.is_some()).count()).sum();
+                        let other_tile_reservations = reservations
+                            .iter()
+                            .filter(|(rh, rc, rsym)| rh == &node.hex_id && *rc == TILE_RESERVATION && rsym != corp_sym)
+                            .count();
+                        let other_city_reservations = reservations
+                            .iter()
+                            .filter(|(rh, rc, rsym)| rh == &node.hex_id && *rc < TILE_RESERVATION_BLOCKING && rsym != corp_sym)
+                            .count();
+                        total_slots.saturating_sub(total_tokens + other_tile_reservations + other_city_reservations) == 0
+                    } else {
+                        let num_tokens = city.tokens.iter().filter(|t| t.is_some()).count();
+                        let num_other_reservations = reservations
+                            .iter()
+                            .filter(|(rh, rc, rsym)| rh == &node.hex_id && *rc == node.index && rsym != corp_sym)
+                            .count();
+                        let total_slots = city.tokens.len();
+                        total_slots.saturating_sub(num_tokens + num_other_reservations) == 0
+                    };
+                    if !blocked {
+                        tokenable.push(TokenableCity { hex_id: node.hex_id.clone(), city_index: node.index });
+                    }
+                }
+            }
+        }
+    }
+    tokenable.sort_by(|a, b| (a.hex_id.as_str(), a.city_index).cmp(&(b.hex_id.as_str(), b.city_index)));
+    tokenable
+}
+
+/// The walk as it was before the flat arrays (§11.3), kept verbatim: the fallback for a token on a hex the
+/// board doesn't index, and what the differential check compares the flat walk with.
+fn compute_corp_graph_reference(
     corp_sym: &str,
     hexes: &[Hex],
     hex_idx: &HashMap<String, usize>,
@@ -162,7 +791,7 @@ fn compute_corp_graph(
         let mut edge_counter: HashMap<(String, u8), u32> = HashMap::new();
         let mut local_result_nodes: HashSet<NodeId> = HashSet::new();
 
-        walk_from_node(
+        walk_from_node_reference(
             hexes,
             hex_idx,
             hex_adjacency,
@@ -361,27 +990,6 @@ fn compute_corp_graph(
 // Walk algorithm
 // ---------------------------------------------------------------------------
 
-/// Check if an edge on a tile has more than one path using it (converging exit).
-/// When true, paths walked through this edge should be temporarily visited
-/// (removed from visited_paths after the recursive walk completes).
-fn is_converging_exit(tile: &Tile, edge: u8) -> bool {
-    // An edge is "converging" when multiple edge-to-edge paths share it.
-    // City/town-to-edge paths don't count — they represent a single route
-    // through the city, not a crossover.
-    let edge_ep = PathEndpoint::Edge(edge);
-    let count = tile
-        .paths
-        .iter()
-        .filter(|p| {
-            !p.terminal
-                && (p.a == edge_ep || p.b == edge_ep)
-                && p.a.edge_num().is_some()
-                && p.b.edge_num().is_some()
-        })
-        .count();
-    count > 1
-}
-
 /// Walk outward from a node (city/town/offboard) through connected paths.
 ///
 /// `converging` mirrors the Python engine's converging_path flag: when true,
@@ -393,7 +1001,7 @@ fn is_converging_exit(tile: &Tile, edge: u8) -> bool {
 /// in the current DFS stack, preventing infinite loops when paths are
 /// un-visited due to converging.
 #[allow(clippy::too_many_arguments)]
-fn walk_from_node(
+fn walk_from_node_reference(
     hexes: &[Hex],
     hex_idx: &HashMap<String, usize>,
     hex_adjacency: &HashMap<String, HashMap<u8, String>>,
@@ -474,7 +1082,7 @@ fn walk_from_node(
                     if *cnt == 0 {
                         *cnt += 1;
                         let enter_edge = (*exit_edge + 3) % 6;
-                        walk_into_hex(
+                        walk_into_hex_reference(
                             hexes,
                             hex_idx,
                             hex_adjacency,
@@ -499,7 +1107,7 @@ fn walk_from_node(
                     index: *idx,
                 };
                 if !is_city_blocked(hexes, hex_idx, hex_id, *idx, corp_sym) {
-                    walk_from_node(
+                    walk_from_node_reference(
                         hexes,
                         hex_idx,
                         hex_adjacency,
@@ -522,7 +1130,7 @@ fn walk_from_node(
                     node_type: NodeType::Town,
                     index: *idx,
                 };
-                walk_from_node(
+                walk_from_node_reference(
                     hexes,
                     hex_idx,
                     hex_adjacency,
@@ -584,7 +1192,7 @@ fn walk_from_node(
                             if *cnt == 0 {
                                 *cnt += 1;
                                 let enter_edge = (*e + 3) % 6;
-                                walk_into_hex(
+                                walk_into_hex_reference(
                                     hexes,
                                     hex_idx,
                                     hex_adjacency,
@@ -632,7 +1240,7 @@ fn walk_from_node(
 ///
 /// See `walk_from_node` for documentation on `converging` and `edge_counter`.
 #[allow(clippy::too_many_arguments)]
-fn walk_into_hex(
+fn walk_into_hex_reference(
     hexes: &[Hex],
     hex_idx: &HashMap<String, usize>,
     hex_adjacency: &HashMap<String, HashMap<u8, String>>,
@@ -718,7 +1326,7 @@ fn walk_into_hex(
                     if *cnt == 0 {
                         *cnt += 1;
                         let next_enter = (*exit_edge + 3) % 6;
-                        walk_into_hex(
+                        walk_into_hex_reference(
                             hexes,
                             hex_idx,
                             hex_adjacency,
@@ -743,7 +1351,7 @@ fn walk_into_hex(
                     index: *idx,
                 };
                 if !is_city_blocked(hexes, hex_idx, hex_id, *idx, corp_sym) {
-                    walk_from_node(
+                    walk_from_node_reference(
                         hexes,
                         hex_idx,
                         hex_adjacency,
@@ -769,7 +1377,7 @@ fn walk_into_hex(
                     node_type: NodeType::Town,
                     index: *idx,
                 };
-                walk_from_node(
+                walk_from_node_reference(
                     hexes,
                     hex_idx,
                     hex_adjacency,
@@ -834,7 +1442,7 @@ fn walk_into_hex(
                             if *cnt == 0 {
                                 *cnt += 1;
                                 let next_enter = (*e + 3) % 6;
-                                walk_into_hex(
+                                walk_into_hex_reference(
                                     hexes,
                                     hex_idx,
                                     hex_adjacency,
@@ -1422,5 +2030,65 @@ mod tests {
             graph.tokenable_cities.is_empty(),
             "Same-hex city should not be tokenable"
         );
+    }
+
+    /// G1 (docs/SITE_ENGINE_RS_STEP3.md §11.3): every `compute_corp_graph` a test makes is compared with the walk as it
+    /// was (`compute_corp_graph_reference`, `graph_cross_check`); these walks make thousands on maps denser than real
+    /// games (1867's generator, both policies), and the three neutrality pins make the rest.
+    #[test]
+    fn the_flat_walk_equals_the_reference_on_generated_1867_games() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let before = GRAPH_CROSS_CHECKS.load(Relaxed);
+        for (players, seed, policy) in [
+            (3, 2053, crate::title::CrossPlayerPolicy::RULES),
+            (4, 7, crate::title::CrossPlayerPolicy::RULES),
+            (5, 11, crate::title::CrossPlayerPolicy::RESTRICTED),
+        ] {
+            let r = crate::g1867::fuzz::walk(players, seed, 2500, policy);
+            assert!(r.error.is_none(), "{:?}", r.error);
+        }
+        assert!(GRAPH_CROSS_CHECKS.load(Relaxed) - before > 1000, "{}", GRAPH_CROSS_CHECKS.load(Relaxed) - before);
+    }
+
+    /// The same check over stored site games (a scratch run, `GRAPH_CORPUS=<dir or .json>[:...]`): at every position of
+    /// every game, every company's graph computed afresh by both walks.
+    #[cfg(feature = "site")]
+    #[test]
+    #[ignore]
+    fn the_flat_walk_equals_the_reference_on_a_corpus() {
+        let Ok(spec) = std::env::var("GRAPH_CORPUS") else { return };
+        let mut files = Vec::new();
+        for part in spec.split(':') {
+            let p = std::path::Path::new(part);
+            if p.is_dir() {
+                for e in std::fs::read_dir(p).unwrap().flatten() {
+                    if e.path().extension().is_some_and(|x| x == "json") {
+                        files.push(e.path());
+                    }
+                }
+            } else {
+                files.push(p.to_path_buf());
+            }
+        }
+        let (mut positions, mut graphs) = (0u64, 0u64);
+        for f in files {
+            let data: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+            let Ok(mut g) = crate::site::game::SiteGame::load(&data) else { continue };
+            g.site_log = false;
+            while !g.done() {
+                g.process_next();
+                positions += 1;
+                let syms: Vec<String> = g.game.corporations.iter().filter(|c| !c.closed).map(|c| c.sym.clone()).collect();
+                for sym in syms {
+                    let tokens = g.game.corp_token_positions(&sym);
+                    let reservations = g.game.home_reservations();
+                    let flat = compute_corp_graph_flat(&sym, &g.game.hexes, &g.game.hex_idx, &g.game.hex_adjacency, &tokens, &reservations);
+                    let reference = compute_corp_graph_reference(&sym, &g.game.hexes, &g.game.hex_idx, &g.game.hex_adjacency, &tokens, &reservations);
+                    assert_same_graph(&flat, &reference, &format!("{} @{} {sym}", f.display(), g.current_action_id));
+                    graphs += 1;
+                }
+            }
+        }
+        eprintln!("graph corpus: {positions} positions, {graphs} graphs equal");
     }
 }
