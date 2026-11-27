@@ -509,8 +509,10 @@ pub fn bot_view(g: &mut SiteGame) -> Value {
 }
 
 /// Ruby's `active_players_id` once the game is over (bot_view's `acting` of a finished game): the round is left as
-/// it was, so its active entities' players, or every player not bankrupt. Best effort: the players who were to act
-/// when it ended (`SiteGame::acting_at_end`), else every player not bankrupt.
+/// it was, so its active entities' players, or every player not bankrupt. A manual end: the players who were to act;
+/// a bankruptcy: the bankrupt president (`SiteGame::acting_at_end`); an end at a round's end (the bank, the final
+/// phase): every player not bankrupt (the finished round has no active entity). Checked on production's 31 games'
+/// bot views (read-only).
 fn finished_acting(g: &SiteGame) -> Vec<u32> {
     if let Some(a) = &g.acting_at_end {
         if !a.is_empty() {

@@ -666,6 +666,11 @@ impl SiteGame {
             }
         });
         super::programs::observe(self, stock_turn_before, a, hist_player, won_minor, advanced, auction_before);
+        // a bankruptcy ends the game with Ruby's round where it was: its active entity's player, the bankrupt
+        // president, is who `active_players_id` names (bot_view's `acting` of the finished game)
+        if !was_finished && self.game.finished && matches!(action, Action::Bankrupt { .. }) {
+            self.acting_at_end = hist_player.map(|p| vec![p]);
+        }
         self.site_after(&t, a, &action, before, corp_ranks, tr_before);
         if let Some(b) = log_before {
             let mut lines = super::log::explain(self, &b, a);
