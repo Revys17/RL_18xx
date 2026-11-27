@@ -14,6 +14,7 @@ fn supported_titles_py() -> Vec<&'static str> {
 pub mod pyerr;
 pub mod abilities;
 pub mod action_index;
+pub mod clock;
 pub mod actions;
 pub mod core;
 pub mod decode;

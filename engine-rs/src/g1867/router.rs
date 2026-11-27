@@ -1646,7 +1646,7 @@ impl BaseGame {
     /// The search behind `g1867_auto_routes`; `filter` false keeps every
     /// priced route (the tests' reference).
     pub(crate) fn g1867_route_search(&self, corp: &str, filter: bool) -> AutoRoutes {
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         let none = AutoRoutes {
             routes: Vec::new(),
             revenue: 0,
@@ -1708,9 +1708,9 @@ impl BaseGame {
             INEXACT_CALLS.fetch_add(1, Ordering::Relaxed);
         }
 
-        let t1 = std::time::Instant::now();
+        let t1 = crate::clock::Instant::now();
         let (chosen, best) = best_combination(&walk, &train_kinds, INDEX_MIN);
-        let t2 = std::time::Instant::now();
+        let t2 = crate::clock::Instant::now();
         let bonuses = route_bonuses(self, corp);
         let mut routes = Vec::new();
         let mut total = 0;

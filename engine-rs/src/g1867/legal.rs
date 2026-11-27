@@ -180,11 +180,11 @@ pub mod stats {
     }
     /// A section's start (None while the profile is off).
     #[inline]
-    pub fn start() -> Option<std::time::Instant> {
-        profiling().then(std::time::Instant::now)
+    pub fn start() -> Option<crate::clock::Instant> {
+        profiling().then(crate::clock::Instant::now)
     }
     /// Credit the time since `t0` to section `key` (a no-op while off).
-    pub fn stop(t0: Option<std::time::Instant>, key: impl FnOnce() -> String) {
+    pub fn stop(t0: Option<crate::clock::Instant>, key: impl FnOnce() -> String) {
         let Some(t0) = t0 else { return };
         record(key, t0.elapsed().as_nanos() as u64);
     }
@@ -438,12 +438,12 @@ impl BaseGame {
     }
 
     fn g1867_candidates(&mut self) -> Vec<Move> {
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         let t = stats::start();
         let offers = self.step_offers();
         stats::stop(t, || "offers".into());
         stats::add(&stats::OFFERS_NS, t0.elapsed().as_nanos() as u64);
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         let out = self.g1867_candidates_for(offers);
         stats::add(&stats::GEN_NS, t0.elapsed().as_nanos() as u64);
         out
@@ -507,7 +507,7 @@ impl BaseGame {
 
     /// Keep the candidates that apply (on a clone); dedup.
     fn g1867_validate(&mut self, cands: Vec<Move>) -> Vec<Move> {
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         let out = if reference::on() { self.g1867_validate_reference(cands) } else { self.g1867_validate_inner(cands) };
         stats::add(&stats::VALIDATE_NS, t0.elapsed().as_nanos() as u64);
         out
@@ -1416,7 +1416,7 @@ impl BaseGame {
         let blocked = self.g1867_blocked_hexes();
         // Ruby `graph.connected_hexes(entity)` (the lay targets and the
         // edges each is reached by).
-        let tg = std::time::Instant::now();
+        let tg = crate::clock::Instant::now();
         let graph = self.g1867_graph(c);
         stats::add(&stats::LAY_GRAPH_NS, tg.elapsed().as_nanos() as u64);
         let targets = graph.connected_hexes.clone();
@@ -1435,7 +1435,7 @@ impl BaseGame {
             if slot.cannot_reuse_same_hex && laid_hexes.contains(&hex_id) {
                 continue;
             }
-            let ts = std::time::Instant::now();
+            let ts = crate::clock::Instant::now();
             let nb = self.passable_exits_for(&hex_id);
             let mut with_rot: Vec<(String, Vec<u8>)> = Vec::new();
             for t in self.g1867_potential_tiles(hi) {
@@ -1448,7 +1448,7 @@ impl BaseGame {
             }
             let keep = self.g1867_max_exits(hi, with_rot.iter().map(|(t, _)| t.clone()).collect());
             stats::add(&stats::LAY_SEARCH_NS, ts.elapsed().as_nanos() as u64);
-            let tc = std::time::Instant::now();
+            let tc = crate::clock::Instant::now();
             let terrain: i32 = self.hexes[hi].tile.upgrades.iter().map(|u| u.cost).sum();
             for (t, rots) in with_rot {
                 if !keep.contains(&t) {
