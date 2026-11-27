@@ -143,7 +143,8 @@ fn main() {
         for path in &files {
             let Ok(text) = std::fs::read_to_string(path) else { continue };
             let Ok(data) = serde_json::from_str::<Value>(&text) else { continue };
-            if data.get("title").and_then(Value::as_str) != Some("1830") {
+            let title = data.get("title").and_then(Value::as_str).unwrap_or("");
+            if !engine_rs::site::TITLES.contains(&title) || only_title.as_deref().is_some_and(|t| t != title) {
                 continue;
             }
             // distinct games: the players, rules and action stream (ids, users and times aside)

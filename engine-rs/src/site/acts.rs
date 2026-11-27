@@ -21,16 +21,20 @@ fn bid_actions(menu: &Value, pid: u32) -> Vec<Value> {
     let mut out = Vec::new();
     for lot in menu.get("auction").and_then(Value::as_array).cloned().unwrap_or_default() {
         let sym = lot["sym"].clone();
+        // (a lot that is a corporation, 1867's minors: the bid names it so)
+        let key = if lot["target"] == "corporation" { "corporation" } else { "company" };
         let (lo, hi) = (lot["minBid"].as_i64().unwrap_or(0), lot["maxBid"].as_i64().unwrap_or(0));
         for price in [lo, hi] {
-            let a = json!({"type": "bid", "entity": pid, "entity_type": "player", "company": sym, "price": price});
+            let mut a = json!({"type": "bid", "entity": pid, "entity_type": "player", "price": price});
+            a[key] = sym.clone();
             if !out.contains(&a) {
                 out.push(a);
             }
         }
         if lot["buy"].as_bool() == Some(true) {
             let value = lot["value"].as_i64().unwrap_or(0);
-            let a = json!({"type": "bid", "entity": pid, "entity_type": "player", "company": sym, "price": value});
+            let mut a = json!({"type": "bid", "entity": pid, "entity_type": "player", "price": value});
+            a[key] = sym.clone();
             if !out.contains(&a) {
                 out.push(a);
             }
