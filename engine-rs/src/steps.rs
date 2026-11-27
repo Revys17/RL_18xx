@@ -353,7 +353,7 @@ impl BaseGame {
     /// `current_actions` for its own current entity, or whose per-kind
     /// blocking override fires — and that step's current entity. `None` when
     /// no step blocks.
-    fn blocking_step_entity(&mut self, snap: &Round) -> Option<(usize, StepEntity)> {
+    pub(crate) fn blocking_step_entity(&mut self, snap: &Round) -> Option<(usize, StepEntity)> {
         let steps = self.round_step_descs(snap);
         for (i, desc) in steps.iter().enumerate() {
             if !self.step_active(desc, snap) {
@@ -1072,7 +1072,7 @@ impl BaseGame {
     /// Python `step.actions(entity)` mapped to the engine's action-type
     /// strings. Each arm is a faithful port of the corresponding gate from the
     /// superseded hand-derived `legal_action_types` arms.
-    fn step_actions(
+    pub(crate) fn step_actions(
         &mut self,
         desc: &StepDesc,
         entity: &StepEntity,
