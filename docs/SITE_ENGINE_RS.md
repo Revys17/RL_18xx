@@ -108,6 +108,8 @@ not move 1830's site behaviour. Bringing the spike forward is a port, not a rewr
   words differ, and neither menu offers the bid. The decision on X1 itself stays Caleb's; step 1 changes nothing.
 - **X2** (M&H exchange offered where Ruby refuses) and **X3** (bankruptcy not offered at 2 positions): fixed by the
   training session in engine-rs on master; A rebases onto them and re-runs everything (§9.4). A does not touch them.
+  (X2 landed, 96689b7. X3 turned out to be the site's own rule, not the engine's: Caleb kept voluntary bankruptcy for
+  the site's players, so the site menu offers it and the bots' enumeration keeps the printed rule: §11.2.)
 - **M4-M10**: A and C fix them (§2.3).
 
 ---
@@ -674,7 +676,8 @@ work; a test-user game with every move kind posted from Rust and accepted, one w
 - **Two key implementations** (Ruby and Rust) can disagree by their own bugs: the corpus comparison (§8.2) runs before
   the live shadow, and every field of §5.3 is read from one plain engine attribute on the Ruby side.
 - **X2/X3 timing**: until they land, the Rust menu offers an M&H exchange Ruby refuses (the server refuses, the page
-  resyncs) and lacks bankruptcy at 2 known positions; the dev default stays Opal until then.
+  resyncs) and lacks bankruptcy at 2 known positions; the dev default stays Opal until then. (Both closed: X2 on
+  master, X3 in the site menu, §11.2.)
 - **X1**: no disagreement on this site since the auction lock; Caleb's decision pending, nothing in step 1 depends on it.
 - **Download size**: the 1830-only wasm is ~+28% over Opal (412 vs 321 KB brotli, the evaluation). Trimming needs the
   1822/1867 code paths behind features (~40 call sites in shared functions): deferred, not step 1.
@@ -768,4 +771,68 @@ auction's all-pass (minimum bid, or the privates' income), a bankruptcy's sales,
 Left as they were: X3 (bankruptcy not offered at 3 corpus positions and one live one: the training session's; Rust
 should not be anyone's default until it lands), X1 (Caleb's), and the menu singletons of §11. S2, H2 (in
 `operating_step_auto_skips`, next to X3's buy-train area) and now S6 and H5 were made before X3 landed: re-checked,
-and re-applied if needed, when A rebases onto it.
+and re-applied if needed, when A rebases onto it. (X3 is now closed in the site layer, §11.2: no engine fix is coming,
+so nothing waits to be rebased onto.)
+
+### 11.2 The 1830 polish (2026-11-26): X3 in the site menu, the snapshot's `ending` and `auctioning`
+
+Three commits on f6a9fe5, **all in `src/site`** (and two site fixtures): no engine edit outside `src/site`, so §4's
+list is unchanged (nothing new for the training session to review there), and the neutrality digests are unchanged
+(the gate below).
+
+**X3, voluntary bankruptcy: kept for the site's players** (Caleb's decision, 2026-11-26). What the three positions
+were (:9301 8@474 and 12@701: CPR with $1 in Buy Trains; the verification's live game 15@597: NYC with $160): a
+company with **no train and no route** (so not obliged to buy one: Game#must_buy_train? reads Ruby's route_info,
+whose `route_train_purchase` is missing there), whose president's cash and sellable shares can't reach the cheapest
+depot train. Ruby (`Step::Bankrupt`, first in 1830's operating round) lists `bankrupt` for the operating company at
+every step and accepts it whenever `can_go_bankrupt?` holds (total_emr_buying_power below `depot.min_depot_price`);
+the site's hand on Opal (living-board `manual.ts` `bankruptRaw`) shows it in Buy Trains when the active step's
+`must_buy_train?` isn't `false` -- and Ruby answers `nil` without a route, which JavaScript takes as true. So the site
+offers bankruptcy to a company with no train facing a depot with trains whenever its president can't reach the
+cheapest depot train, route or not. engine-rs's processing already accepted it (its Buy Trains guard is the same
+`can_go_bankrupt_emr`); only the site menu lacked it.
+
+| What | Where |
+|---|---|
+| `bankrupt_offer` (`src/site/menu.rs`): Buy Trains, no crowded company, the company has no train, Ruby's `depot_trains` not empty, `can_go_bankrupt_emr`. The route term (`ruby_must_buy`) is gone from it. The words stay Opal's ("CPR must buy a train, ...": `words.ts`, the same for both engines) | site menu only |
+| The bots keep the printed rule: `legal_action_types` and the factored enumeration (shared code) are not changed; at 15@597 they offer no `bankrupt` (the test asserts it) | unchanged |
+| Ruby accepts each of the three (the site's Ruby in a throwaway container, `bankrupt` processed at 8@474, 12@701, 15@597: no exception, the game ends `bankrupt`) | checked |
+
+**The snapshot's `ending` and `auctioning`** (`src/site/view.rs`), as living-board's Opal adapter sends them:
+- `ending`: Ruby `Game#game_ending_description` read as adapter.ts `endingOf` reads it, `{when, why, text}` ("after OR
+  15.3", "bank broken", "Bank Broken : Game Ends at conclusion of OR 15.3"), null until an end is triggered and once
+  the game is over; always present (as on Opal). The latched triggers resolved as `BaseGame::should_end_now` resolves
+  them; 1830's broken bank is `:full_or` (`OR <turn>.<operating_rounds>` in an operating round, the phase's count
+  elsewhere). The `:current_or` and final-phase texts follow base.rb and are unchecked against 1867's Ruby until the
+  site layer runs 1867.
+- `auctioning`: Ruby `Auctioner#auctioning` (WaterfallAuction#active_auction: the company up for auction while it
+  has more than one bid; adapter.ts `auctionedNow`), absent otherwise as on Opal. The client's Rust worker derived it
+  itself until now (`steps.ts withAuctioning`, removed in living-board `rust-1830-polish`).
+
+**Commits** (on f6a9fe5): `3446997` site menu: X3; `ce08085` site view: `ending` and `auctioning`; then this doc.
+Tests: `site::tests::voluntary_bankruptcy_is_offered_where_the_sites_hand_offers_it` (fixture `bankrupt_voluntary`:
+the verification's game 15, players renamed: offered at 597 with Opal's facts, `min` 630, `power` 246; absent from
+`legal_action_types`; accepted, the game ends; not offered at 598 once NYC holds a train; B&M's must-buy bankruptcy
+at 613 offered by both), `the_snapshot_says_when_the_game_ends_as_ruby_does` (fixture `bank_broken`: :9301's bot game
+44, renamed; the bank breaks at 794 in OR 15.1 of 3; Opal's `ending` from 794 to 880, null at 793 and at the end,
+881), `the_snapshot_names_the_company_up_for_auction` (18@5 none, 6 C&A, 7 none).
+
+| Check (f6a9fe5 -> ce08085) | Before | After |
+|---|---|---|
+| `site_replay --goldens` (living-board's Opal goldens, `$RUST1/goldens`): the :9301 corpus, 315 games, 82,083 positions: snapshots | 76,821 (auctioning 3,036, ending 2,226 positions) | **82,083** |
+| same: menus | 322,143 / 322,150 (2 bankruptcy = X3) | **322,145** / 322,150 (left: 4 M&H exchange IPO share NYC_3/NYC_2, M9; 1 D&H teleport station Opal's hand lacks, O2) |
+| The verification's live games (7, 3,908 positions, `$RUST1/V/live/goldens`): snapshots / menus | 3,907 / 15,607 | **3,908 / 15,608** |
+| living-board `test/rust/parity.cjs --all` on the new package (329 games incl. the 14 fixtures): `snap` (strict, `ending` included) | 0 / 86,842 (snapKnown 86,130) | **86,130** / 86,842 (the :9301 games 82,083 / 82,083; the rest are the RL fixtures' streams, as before) |
+| same, the live games: snapshots / menus / hand | 0 / 3,908 strict; 15,607 / 15,608 | **3,908 / 3,908; 15,608 / 15,608** |
+| Strict replay, results, log, tile options, auto routes | unchanged | unchanged |
+
+**Gate** (ce08085, the agreement's item 5; `taskset -c 24-31,56-63 nice -n 19`, `CUDA_VISIBLE_DEVICES=`, the worktree's
+own venv): `cargo test --release --no-default-features --features python` 268 passed, 0 failed, 11 ignored
+(neutrality included); `--features site` 287 passed, 0 failed, 10 ignored; `cargo check --target
+wasm32-unknown-unknown --no-default-features --features wasm` and the default `cargo check` clean; `uv sync`, then
+`pytest tests/`: 1,823 passed, 6 skipped, 2 deselected, 0 failed (38 min, on cores shared with other runs).
+
+**Package** (K2): `build-site.sh` at ce08085: `engine_rs_bg.wasm` 1,486,257 bytes (552,818 gzip), `engine_rs.js`
+22,806, `site_engine` 5,153,968; in the polish's own scratch (`rust2/polish/pkg/ce0808514096`; `$RUST1/pkg/current`
+was left as it was).
+
