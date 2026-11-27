@@ -61,11 +61,27 @@ fn holder_name(game: &BaseGame, e: &EntityId) -> String {
 }
 
 fn hex_desc(game: &BaseGame, hex: &str) -> String {
+    if game.title == "1867" {
+        return match LOCATION_NAMES_1867.iter().find(|(h, _)| *h == hex) {
+            Some((_, loc)) => format!("{hex} ({loc})"),
+            None => hex.to_string(),
+        };
+    }
     match crate::title::g1830::location_names().get(hex) {
         Some(loc) if game.title == "1830" => format!("{hex} ({loc})"),
         _ => hex.to_string(),
     }
 }
+
+/// 1867's LOCATION_NAMES (g_1867/map.rb), as the log names a hex
+const LOCATION_NAMES_1867: &[(&str, &str)] = &[
+    ("D2", "Timmins ($80 if includes T/M/Q)"), ("D8", "Sudbury"), ("F8", "North Bay"), ("E13", "Barrie"),
+    ("E15", "Guelph"), ("E17", "Hamilton"), ("D16", "Berlin"), ("C17", "London"), ("G15", "Peterborough"),
+    ("I15", "Kingston"), ("J12", "Ottawa"), ("M9", "Trois-Rivières"), ("O7", "Quebec"), ("N12", "Sherbrooke"),
+    ("C15", "Goderich"), ("B18", "Sarnia"), ("H14", "Belleville"), ("H10", "Pembroke"), ("K13", "Cornwall"),
+    ("L10", "St. Jerome"), ("M13", "Granby"), ("L12", "Montreal"), ("F16", "Toronto"), ("A7", "Sault Ste. Marie"),
+    ("F18", "Buffalo"), ("M15", "New England"), ("O13", "Maine"), ("P8", "Maritime Provinces"), ("A19", "Detroit"),
+];
 
 fn price_of(game: &BaseGame, sym: &str) -> Option<(i32, u8, u8)> {
     let c = game.corporations.iter().find(|c| c.sym == sym)?;
@@ -118,8 +134,205 @@ fn floats(b: &BaseGame, a: &BaseGame, out: &mut Vec<String>) {
         let was = b.corporations.iter().find(|x| x.sym == c.sym).is_some_and(|x| x.floated);
         if c.floated && !was {
             out.push(format!("{} floats", c.sym));
-            out.push(format!("{} receives ${}", c.sym, c.cash - b.corporations.iter().find(|x| x.sym == c.sym).map_or(0, |x| x.cash)));
+            // (1867's companies are incremental: Ruby's float! pays nothing at once)
+            if a.title != "1867" {
+                out.push(format!("{} receives ${}", c.sym, c.cash - b.corporations.iter().find(|x| x.sym == c.sym).map_or(0, |x| x.cash)));
+            }
         }
+    }
+}
+
+/// Merge#move_assets' words: the minor's cash, companies, loans and trains as they move to the major.
+fn receiving(bg: &BaseGame, minor: &str) -> String {
+    let Some(&i) = bg.corp_idx.get(minor) else { return String::new() };
+    let c = &bg.corporations[i];
+    let mut parts = vec![format!("${}", c.cash)];
+    let me = EntityId::corporation(minor);
+    let comps: Vec<String> = bg.companies.iter().filter(|m| m.owner == me && !m.closed).map(|m| cname(bg, &m.sym)).collect();
+    if !comps.is_empty() {
+        parts.push(format!("companies ({})", comps.join(", ")));
+    }
+    if c.loans > 0 {
+        parts.push(format!("loans ({})", c.loans));
+    }
+    if !c.trains.is_empty() {
+        parts.push(format!("trains ({})", c.trains.iter().map(|t| t.name.clone()).collect::<Vec<_>>().join(", ")));
+    }
+    parts.join(", ")
+}
+
+/// 1867's phase events after the phase line and the rusting (g_1867/game.rb event_*): the green minors, the majors,
+/// the minors that can't start, the privates nationalized, and the trainless companies nationalized
+/// (postevent_trainless_nationalization!, `nationalize!`'s lines).
+fn phase_events_1867(g: &SiteGame, b: &Before, out: &mut Vec<String>) {
+    let a = &g.game;
+    let bg = &b.game;
+    let fired = |name: &str| super::g1867::event_fired(a, name) && !super::g1867::event_fired(bg, name);
+    if fired("green_minors_available") {
+        out.push("Green minors are now available".into());
+    }
+    if fired("majors_can_ipo") {
+        out.push("Majors can now be started".into());
+    }
+    if fired("minors_cannot_start") {
+        out.push("Minors can no longer be started".into());
+    }
+    if fired("nationalize_companies") {
+        out.push("-- Event: Private companies are nationalized --".into());
+        for (i, c) in a.companies.iter().enumerate() {
+            let was = &bg.companies[i];
+            if c.sym == "3" || was.closed || was.owner.corp_sym() == Some("CN") {
+                continue;
+            }
+            if c.owner.corp_sym() == Some("CN") {
+                out.push(format!("{} nationalized from {} for ${}", cname(a, &c.sym), holder_name(bg, &was.owner), c.value));
+            }
+        }
+    }
+    if fired("minors_nationalized") {
+        out.push("Minors nationalized".into());
+    }
+    // the companies nationalized now: minors closed, majors started afresh, each with its lines
+    let gone: Vec<String> = bg
+        .corporations
+        .iter()
+        .filter(|c| c.floated && c.corp_type != crate::title::CorpType::National)
+        .filter(|c| {
+            a.corp_idx.get(c.sym.as_str()).is_some_and(|&i| {
+                let n = &a.corporations[i];
+                n.closed && c.corp_type == crate::title::CorpType::Minor || (!n.closed && n.ipo_price.is_none())
+            })
+        })
+        .map(|c| c.sym.clone())
+        .collect();
+    for sym in by_sort_order(bg, gone) {
+        let Some(&i0) = bg.corp_idx.get(sym.as_str()) else { continue };
+        let c0 = &bg.corporations[i0];
+        out.push(format!("{sym} is nationalized"));
+        // the price it settles at: one step left, two more per unpaid loan (nationalization_loan_movement)
+        let from = c0.share_price.as_ref().map_or(0, |s| s.price);
+        let col = c0.share_price.as_ref().map_or(0, |s| s.column) as i32;
+        let steps = 1 + 2 * c0.loans as i32;
+        let to = a.stock_market.share_price_at(0, (col - steps).max(0) as u8).map_or(from, |s| s.price);
+        if to != from {
+            out.push(format!("{sym}'s share price moves left from ${from} to ${to}"));
+        }
+        let mut pays: Vec<(i32, usize, String)> = Vec::new();
+        for (k, pid) in super::view::player_order(g).into_iter().enumerate() {
+            let pct: i32 = c0.shares.iter().filter(|s| s.owner == EntityId::player(pid)).map(|s| s.percent as i32).sum();
+            let n = pct / c0.share_unit_percent.max(1) as i32;
+            if n > 0 {
+                pays.push((-(n * to), k, pname(a, pid)));
+            }
+        }
+        pays.sort();
+        if !pays.is_empty() {
+            let total = (100 / c0.share_unit_percent.max(1) as i32) * to;
+            let list: Vec<String> = pays.iter().map(|(amt, _, nm)| format!("${} to {nm}", -amt)).collect();
+            out.push(format!("{sym} settles with shareholders ${total} = ${to} ({})", list.join(", ")));
+        }
+        if c0.corp_type == crate::title::CorpType::Minor {
+            out.push(format!("{sym} closes"));
+        }
+    }
+}
+
+/// 1867's auctions (G1867::Step::SingleItemAuction, BuySellParSharesViaBid): the lines of a bid or a pass, and of
+/// the auction settling. Returns false where step 1's lines apply.
+fn auction_lines_1867(g: &SiteGame, b: &Before, raw: &Value, out: &mut Vec<String>) -> bool {
+    let a = &g.game;
+    let bg = &b.game;
+    let t = raw_type(raw);
+    let ent = super::json::entity_of(raw).unwrap_or_default();
+    let Ok(pid) = ent.parse::<u32>() else { return false };
+    let who = pname(a, pid);
+    let price = raw.get("price").and_then(Value::as_i64).unwrap_or(0);
+    let cash_of = |game: &BaseGame, p: u32| game.players.iter().find(|x| x.id == p).map_or(0, |x| x.cash);
+    match (&bg.round, t) {
+        (Round::Auction(s0), "bid" | "pass") if s0.single_item.is_some() => {
+            let Some(ci) = s0.auctioning else { return false };
+            let name = cname(a, &bg.companies[ci].sym);
+            let dutch = s0.single_item.as_ref().is_some_and(|x| x.dutch_mode);
+            let had_bids = s0.bids.get(&ci).is_some_and(|v| !v.is_empty());
+            if t == "bid" && !dutch {
+                out.push(format!("{who} bids ${price} for {name}"));
+            } else if t == "pass" {
+                if had_bids || dutch {
+                    out.push(format!("{who} passes on {name}"));
+                } else {
+                    out.push(format!("{who} declined to bid on {name}"));
+                }
+            }
+            // the lot settled: its winner, the next lot up; or the price drops (enter_dutch)
+            let won = a.companies[ci].owner.player_id();
+            if let Some(w) = won.filter(|_| bg.companies[ci].owner.player_id().is_none()) {
+                let paid = cash_of(bg, w) - cash_of(a, w);
+                out.push(format!("{} wins the auction for {name} with a bid of ${paid}", pname(a, w)));
+                if let Round::Auction(s1) = &a.round {
+                    if let Some(n) = s1.auctioning {
+                        out.push(format!("{} is up for auction, minimum bid is ${}", cname(a, &a.companies[n].sym), a.sa_min_bid(s1, n)));
+                    }
+                }
+            } else if let Round::Auction(s1) = &a.round {
+                let d0 = bg.companies[ci].discount;
+                let d1 = a.companies[ci].discount;
+                if d1 > d0 {
+                    let tense = if dutch { "bought" } else { "bid on" };
+                    out.push(format!("Nobody {tense} {name}, reducing price to ${}", a.companies[ci].min_bid()));
+                }
+                let _ = s1;
+            }
+            true
+        }
+        (Round::Stock(s0), "bid" | "pass") if t == "bid" || s0.bid_auction.is_some() => {
+            let sym = raw.get("corporation").and_then(Value::as_str).map(str::to_string)
+                .or_else(|| s0.bid_auction.as_ref().map(|x| x.corporation_sym.clone()))
+                .unwrap_or_default();
+            if t == "bid" && s0.bid_auction.is_none() {
+                out.push(format!("{who} auctions {sym} for ${price}"));
+                // HOME_TOKEN_TIMING :par: the minor's station is placed as it goes up (place_home_token)
+                if matches!(&a.round, Round::Stock(s1) if s1.pending_home_tokens.iter().any(|(c, _)| c == &sym)) {
+                    out.push(format!("{sym} must choose city for home token"));
+                }
+            } else if t == "bid" {
+                out.push(format!("{who} bids ${price} for {sym}"));
+            } else {
+                out.push(format!("{who} passes on {sym}"));
+            }
+            // the players who can't raise the bid leave the auction (PassableAuction#resolve_bids)
+            let still = matches!(&a.round, Round::Stock(s1) if s1.bid_auction.is_some());
+            let high = match &a.round {
+                Round::Stock(s1) => s1.bid_auction.as_ref().and_then(|x| x.bids.iter().map(|b| b.price).max()),
+                _ => None,
+            }
+            .unwrap_or(price as i32);
+            let before: Vec<u32> = s0.bid_auction.as_ref().map(|x| x.active_bidders.clone()).unwrap_or_else(|| s0.player_order.clone());
+            let after: Vec<u32> = match &a.round {
+                Round::Stock(s1) => s1.bid_auction.as_ref().map(|x| x.active_bidders.clone()).unwrap_or_default(),
+                _ => Vec::new(),
+            };
+            let owner = a.corp_idx.get(sym.as_str()).and_then(|&ci| a.corporations[ci].owner_id.player_id());
+            for p in before {
+                if p == pid || Some(p) == owner || after.contains(&p) {
+                    continue;
+                }
+                if still || owner.is_some() {
+                    out.push(format!("{} cannot bid ${} and is out of the auction for {sym}", pname(a, p), high + 5));
+                }
+            }
+            if let (false, Some(w)) = (still, owner) {
+                let ci = a.corp_idx[sym.as_str()];
+                let par = a.corporations[ci].share_price.as_ref().map_or(0, |s| s.price);
+                let won_at = a.corporations[ci].cash;
+                out.push(format!("{} wins bid on {sym} for ${won_at}", pname(a, w)));
+                out.push(format!("{} pars {sym} at ${par}", pname(a, w)));
+                out.push(format!("{} buys a 100% share of {sym} from the Treasury for ${}", pname(a, w), 2 * par));
+                out.push(format!("{} becomes the president of {sym}", pname(a, w)));
+                out.push(format!("{sym} floats"));
+            }
+            true
+        }
+        _ => false,
     }
 }
 
@@ -138,7 +351,12 @@ fn phase_line(game: &BaseGame) -> String {
         "-- Phase {} (Operating Rounds: {} | Train Limit: {} | Available Tiles: {}) --",
         game.phase.name,
         def.map_or(game.phase.operating_rounds, |d| d.operating_rounds),
-        game.phase.train_limit,
+        if game.title == "1867" {
+            // the phase's train limit by kind (Ruby's PHASES hash, "minor: 2, major: 4")
+            super::g1867::view::phase_limits(&game.phase.name).iter().map(|(k, l)| format!("{k}: {l}")).collect::<Vec<_>>().join(", ")
+        } else {
+            game.phase.train_limit.to_string()
+        },
         tiles.join(", ")
     )
 }
@@ -158,6 +376,12 @@ pub fn start(g: &SiteGame) -> Vec<String> {
             out.push(format!(" * {t}"));
         }
     }
+    // 1867's SingleItemAuction#setup: the first lot goes up (auction_entity_log)
+    if let Round::Auction(s) = &g.game.round {
+        if let (Some(ci), true) = (s.auctioning, s.single_item.is_some()) {
+            out.push(format!("{} is up for auction, minimum bid is ${}", cname(&g.game, &g.game.companies[ci].sym), g.game.sa_min_bid(s, ci)));
+        }
+    }
     out
 }
 
@@ -169,16 +393,77 @@ fn op_corp(game: &BaseGame) -> Option<(String, S, usize, u8)> {
 }
 
 const STEP_ORDER: &[S] = &[S::LayTile, S::PlaceToken, S::RunRoutes, S::Dividend, S::BuyTrain, S::BuyCompany];
+/// 1867's operating steps that log (g_1867/game.rb operating_round: RedeemShares first, BuyCompanyPreloan and
+/// LoanOperations between Dividend and BuyTrain)
+const STEP_ORDER_1867: &[S] = &[
+    S::RedeemShares, S::LayTile, S::PlaceToken, S::RunRoutes, S::Dividend, S::BuyCompanyPreloan, S::LoanOperations,
+    S::BuyTrain, S::BuyCompany,
+];
+thread_local! {
+    /// The title whose step list the log walks (set by `explain` / `turn_start`): 1830's unless 1867's
+    static IS_1867: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn steps_now() -> &'static [S] {
+    if IS_1867.with(|c| c.get()) { STEP_ORDER_1867 } else { STEP_ORDER }
+}
 
 fn step_pos(s: &S) -> usize {
-    STEP_ORDER.iter().position(|x| x == s).unwrap_or(STEP_ORDER.len())
+    let order = steps_now();
+    order.iter().position(|x| x == s).unwrap_or(order.len())
+}
+
+/// The run's revenue for a 1867 minor's automatic payout (the run_routes being explained, else 0).
+fn run_revenue(raw: &Value, corp: &str) -> i32 {
+    if raw.get("type").and_then(Value::as_str) != Some("run_routes") || super::json::entity_of(raw).ok().as_deref() != Some(corp) {
+        return 0;
+    }
+    raw.get("routes").and_then(Value::as_array).map_or(0, |rs| rs.iter().filter_map(|r| r.get("revenue").and_then(Value::as_i64)).sum::<i64>() as i32)
 }
 
 /// The skip lines of a corporation's steps from `from` (inclusive) to `to` (exclusive): Ruby's log_skip and the
-/// dividend step's automatic withhold.
+/// dividend step's automatic withhold (1867: a minor's automatic payout, `run_rev` its run's revenue).
 fn skips(b: &BaseGame, a: &BaseGame, corp: &str, from: usize, to: usize, out: &mut Vec<String>) {
-    for s in STEP_ORDER.iter().take(to.min(STEP_ORDER.len())).skip(from) {
+    skips_with(b, a, corp, from, to, 0, out)
+}
+
+fn skips_with(b: &BaseGame, a: &BaseGame, corp: &str, from: usize, to: usize, run_rev: i32, out: &mut Vec<String>) {
+    let order = steps_now();
+    let is_1867 = a.title == "1867";
+    let minor = is_1867 && a.corp_idx.get(corp).is_some_and(|&i| a.corporations[i].corp_type == crate::title::CorpType::Minor);
+    for s in order.iter().take(to.min(order.len())).skip(from) {
         match s {
+            // G1867 RedeemShares#log_skip and Token#log_skip: majors only
+            S::RedeemShares => {
+                if !minor {
+                    out.push(format!("{corp} skips redeem shares"));
+                }
+            }
+            S::PlaceToken if minor => {}
+            S::BuyCompanyPreloan => out.push(format!("{corp} skips buy companies")),
+            S::LoanOperations => {
+                // InterestOnLoans#pay_interest!: "X pays $N interest for K loans" (nothing owed, nothing said)
+                let loans = b.corp_idx.get(corp).map_or(0, |&i| b.corporations[i].loans);
+                let paid = b.corp_idx.get(corp).map_or(0, |&i| b.corporations[i].cash) - a.corp_idx.get(corp).map_or(0, |&i| a.corporations[i].cash);
+                let left = a.corp_idx.get(corp).map_or(0, |&i| a.corporations[i].loans);
+                if loans > 0 && paid > 0 {
+                    // (InterestOnLoans#pay_interest!'s words, its empty field and all)
+                    out.push(format!("{corp} pays ${} interest for  {loans} loan{}", 5 * loans, if loans == 1 { "" } else { "s" }));
+                }
+                // LoanOperations#skip!: then the loans it can pay off (repay_loan)
+                for _ in left..loans {
+                    out.push(format!("{corp} pays off a loan for $50"));
+                }
+            }
+            S::Dividend if minor && run_rev > 0 => {
+                // G1867::Step::Dividend#skip!: a minor pays half to its treasury, half to its owner
+                let half = run_rev / 2;
+                out.push(format!("{corp} withholds ${half}"));
+                if let Some(p) = a.corp_idx.get(corp).and_then(|&i| a.corporations[i].owner_id.player_id()) {
+                    out.push(format!("{} receives ${}", pname(a, p), run_rev - half));
+                }
+                price_moves(b, a, Some(corp), out);
+            }
             S::LayTile => out.push(format!("{corp} skips lay track")),
             S::PlaceToken => out.push(format!("{corp} skips place a token")),
             S::RunRoutes => out.push(format!("{corp} skips run routes")),
@@ -187,7 +472,12 @@ fn skips(b: &BaseGame, a: &BaseGame, corp: &str, from: usize, to: usize, out: &m
                 price_moves(b, a, Some(corp), out);
             }
             S::BuyTrain => {
-                let full = a.corp_idx.get(corp).is_some_and(|&i| a.corporations[i].trains.len() >= a.phase.train_limit as usize);
+                let limit = if is_1867 {
+                    a.corp_idx.get(corp).map_or(a.phase.train_limit as usize, |&i| a.corp_train_limit(i))
+                } else {
+                    a.phase.train_limit as usize
+                };
+                let full = a.corp_idx.get(corp).is_some_and(|&i| a.corporations[i].trains.len() >= limit);
                 if full {
                     out.push(format!("{corp} automatically skips buy trains because it has no room for more trains"));
                 } else {
@@ -202,6 +492,7 @@ fn skips(b: &BaseGame, a: &BaseGame, corp: &str, from: usize, to: usize, out: &m
 
 /// The lines of one processed action (`raw`: the site JSON as recorded).
 pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
+    IS_1867.with(|c| c.set(g.game.title == "1867"));
     let a = &g.game;
     let bg = &b.game;
     let mut out = Vec::new();
@@ -228,7 +519,10 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
     let mut bank_at: Option<usize> = None;
     let mut bought_at: Option<usize> = None;
     let price = raw.get("price").and_then(Value::as_i64).unwrap_or(0);
+    let auction_1867 = a.title == "1867" && auction_lines_1867(g, b, raw, &mut out);
+    let mut pending_home: Option<String> = None;
     match (t, &bg.round) {
+        _ if auction_1867 => {}
         ("bid", Round::Auction(_)) => {
             let comp = raw.get("company").and_then(Value::as_str).unwrap_or("");
             let first = bg.auction_companies().first().cloned();
@@ -281,7 +575,11 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             if matches!(bg.round, Round::Auction(_)) {
                 out.push(format!("{who} receives a 20% share of {corp}"));
             } else {
-                out.push(format!("{who} buys a 20% share of {corp} from the IPO for ${}", 2 * p));
+                let ipo = if a.title == "1867" { "the Treasury" } else { "the IPO" };
+                out.push(format!("{who} buys a 20% share of {corp} from {ipo} for ${}", 2 * p));
+                if a.title == "1867" && matches!(&a.round, Round::Stock(s1) if s1.pending_home_tokens.iter().any(|(c, _)| c == corp)) {
+                    pending_home = Some(corp.to_string());
+                }
             }
         }
         ("buy_shares", _) if raw.get("entity_type").and_then(Value::as_str) == Some("company") => {
@@ -299,9 +597,18 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             let pct = raw.get("percent").and_then(Value::as_i64).unwrap_or(10);
             let from_market = bg.corporations.iter().find(|c| c.sym == corp).and_then(|c| c.shares.iter().find(|s| format!("{}_{}", corp, s.index) == sid)).is_some_and(|s| s.owner.is_market());
             let corp_b = bg.corporations.iter().find(|c| c.sym == corp);
-            let unit = if from_market { corp_b.and_then(|c| c.share_price.as_ref()).map_or(0, |s| s.price) } else { corp_b.and_then(|c| c.ipo_price.as_ref()).map_or(0, |s| s.price) };
+            // (a company always_market_price, 1867's, sells its treasury shares at the market price)
+            let at_market = from_market || corp_b.is_some_and(|c| c.always_market_price);
+            let unit = if at_market { corp_b.and_then(|c| c.share_price.as_ref()).map_or(0, |s| s.price) } else { corp_b.and_then(|c| c.ipo_price.as_ref()).map_or(0, |s| s.price) };
             let paid = unit * pct as i32 / 10;
-            out.push(format!("{who} buys a {pct}% share of {corp} from {} for ${paid}", if from_market { "the market" } else { "the IPO" }));
+            // Ruby ipo_name: 1867's IPO is its "Treasury"
+            let ipo = if a.title == "1867" { "the Treasury" } else { "the IPO" };
+            if a.title == "1867" && raw.get("entity_type").and_then(Value::as_str) == Some("corporation") {
+                // G1867::Step::RedeemShares: the company buys its own share back
+                out.push(format!("{ent} redeems a {pct}% share  from the market for ${paid}"));
+            } else {
+                out.push(format!("{who} buys a {pct}% share of {corp} from {} for ${paid}", if from_market { "the market" } else { ipo }));
+            }
         }
         ("sell_shares", _) => {
             let shares = raw.get("shares").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -367,6 +674,56 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
                 };
                 out.push(format!("{ent} runs a {tname} train for ${rev}: {s}"));
             }
+        }
+        ("dividend", _) if a.title == "1867" => {
+            // G1867::Step::Dividend (HalfPay): payout, half (half withheld, to the $10 below, the rest paid out per
+            // share) or withhold; every share not a player's pays the company (its treasury's and the market's)
+            let kind = raw.get("kind").and_then(Value::as_str).unwrap_or("");
+            let rev = match &bg.round {
+                Round::Operating(s) => s.revenue,
+                _ => 0,
+            };
+            let withheld = match kind {
+                "payout" => 0,
+                "half" => rev / 2 / 10 * 10,
+                _ => rev,
+            };
+            if kind == "half" {
+                out.push(format!("{ent} runs for ${rev} and pays half"));
+            }
+            if withheld > 0 {
+                out.push(format!("{ent} withholds ${withheld}"));
+            }
+            if kind != "withhold" {
+                let paid = rev - withheld;
+                let per = paid / 10;
+                let mut pays: Vec<(i32, usize, String)> = Vec::new();
+                let mut corp_shares = 0;
+                if let Some(&ci) = bg.corp_idx.get(ent.as_str()) {
+                    for (k, pid2) in super::view::player_order(g).into_iter().enumerate() {
+                        let n: i32 = bg.corporations[ci].shares.iter().filter(|s| s.owner == EntityId::player(pid2)).map(|s| s.percent as i32 / 10).sum();
+                        if n * per > 0 {
+                            pays.push((-(n * per), k, pname(a, pid2)));
+                        }
+                    }
+                    corp_shares = bg.corporations[ci].shares.iter().filter(|s| !s.owner.is_player()).map(|s| s.percent as i32 / 10).sum::<i32>();
+                }
+                if corp_shares * per > 0 {
+                    pays.push((-(corp_shares * per), usize::MAX, ent.clone()));
+                }
+                pays.sort();
+                let list: Vec<String> = pays.iter().map(|(amt, _, nm)| format!("${} to {nm}", -amt)).collect();
+                // (HalfPay's per share is a Float in Ruby: "$19.0")
+                let per_s = if kind == "half" {
+                    let f = paid as f64 / 10.0;
+                    if f.fract() == 0.0 { format!("{f:.1}") } else { format!("{f}") }
+                } else {
+                    per.to_string()
+                };
+                bank_at = Some(out.len());
+                out.push(format!("{ent} pays out ${paid} = ${per_s} per share ({})", list.join(", ")));
+            }
+            price_moves(bg, a, Some(&ent), &mut out);
         }
         ("dividend", _) => {
             let kind = raw.get("kind").and_then(Value::as_str).unwrap_or("");
@@ -456,6 +813,59 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
                 }
             }
         }
+        ("pass", Round::Operating(_)) | ("pass", Round::Merger(_)) | ("pass", Round::Stock(_))
+            if a.title == "1867" && bg.trainless_major.first().is_some_and(|m| m == &ent) =>
+        {
+            // G1867::Step::MajorTrainless#process_pass
+            out.push(format!("{ent} declines to nationalize"));
+        }
+        ("pass", Round::Operating(s)) if a.title == "1867" => {
+            // Ruby log_pass: "X passes <the step's description>"
+            let label: Option<String> = match s.step {
+                S::RedeemShares => Some("redeem shares".into()),
+                S::LayTile => Some(if s.num_laid_track == 1 && s.upgraded_this_turn { "lay track".into() } else if s.num_laid_track >= 2 { "lay track".into() } else { "lay/upgrade track".into() }),
+                S::PlaceToken => Some("place a token".into()),
+                S::BuyTrain => Some("buy trains".into()),
+                S::BuyCompany | S::BuyCompanyPreloan => Some("buy companies".into()),
+                _ => None,
+            };
+            if let Some(l) = label {
+                out.push(format!("{ent} passes {l}"));
+            }
+        }
+        ("merge", Round::Merger(s)) if a.title == "1867" => {
+            let target = raw.get("corporation").and_then(Value::as_str).unwrap_or("").to_string();
+            if s.converting {
+                // Merge#finish_convert: the par, the free 20%, the minor's assets moved, its close
+                let owner = bg.corp_idx.get(ent.as_str()).and_then(|&i| bg.corporations[i].owner_id.player_id());
+                let par = a.corp_idx.get(target.as_str()).and_then(|&i| a.corporations[i].share_price.as_ref().map(|p| p.price)).unwrap_or(0);
+                if let Some(p) = owner {
+                    let nm = pname(a, p);
+                    out.push(format!("{nm} pars {target} at ${par}"));
+                    out.push(format!("{nm} receives a 20% share of {target}"));
+                    out.push(format!("{nm} becomes the president of {target}"));
+                }
+                out.push(format!("{target} floats"));
+                out.push(format!("{ent} closes"));
+                out.push(format!("{ent} converts into {target} receiving {}", receiving(bg, &ent)));
+            } else if !s.merge_major {
+                // Merge#process_merge: a minor added
+                let list = if s.merging.is_empty() { vec![ent.clone()] } else { s.merging.clone() };
+                out.push(format!("Adding {target} to merge of {}", list.join(",")));
+            }
+        }
+        ("pass", Round::Merger(s)) if a.title == "1867" && !s.merging.is_empty() && s.converted.is_none() => {
+            // Merge#process_pass while merging: finish_merge
+            out.push(format!("Finish merge of {}", s.merging.join(",")));
+        }
+        ("pass", Round::Merger(s)) if a.title == "1867" => {
+            if s.converted.is_some() && pid.is_some() {
+                // PostMergerShares#process_pass (log_pass)
+                out.push(format!("{who} passes buy shares post merge"));
+            } else if s.converted.is_none() && s.merging.is_empty() && !s.converting && !s.merge_major {
+                out.push(format!("{ent} passes convert or merge minor corporation"));
+            }
+        }
         ("pass", Round::Operating(s)) => {
             let label = if s.teleport_pending {
                 None
@@ -506,6 +916,18 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
     if t == "sell_shares" || t == "buy_shares" || t == "par" || t == "buy_company" {
         presidents(bg, a, &mut out);
     }
+    let floats_done = auction_1867 || (a.title == "1867" && t == "merge" && matches!(&bg.round, Round::Merger(s) if s.converting));
+    // 1867: the loans the company took for the move (AutomaticLoan#try_take_loan, before it pays: take_loan's line)
+    if a.title == "1867" {
+        let corp = g.operator_of(&ent);
+        let (l0, l1) = (
+            bg.corp_idx.get(corp.as_str()).map_or(0, |&i| bg.corporations[i].loans),
+            a.corp_idx.get(corp.as_str()).map_or(0, |&i| a.corporations[i].loans),
+        );
+        for _ in l0..l1 {
+            out.insert(n, format!("{corp} takes a loan and receives $45"));
+        }
+    }
     if t == "sell_shares" {
         let shares = raw.get("shares").and_then(Value::as_array).cloned().unwrap_or_default();
         let sid = shares.first().and_then(Value::as_str).unwrap_or("");
@@ -513,7 +935,12 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
         // Ruby log_share_price: nothing when the price stays in its cell (`return unless from != to`)
         price_moves(bg, a, Some(&corp), &mut out);
     }
-    floats(bg, a, &mut out);
+    if !floats_done {
+        floats(bg, a, &mut out);
+    }
+    if let Some(c) = pending_home {
+        out.push(format!("{c} must choose city for home token"));
+    }
     if a.bank_broken && !bg.bank_broken {
         let line = "-- The bank has broken --".to_string();
         match bank_at {
@@ -576,6 +1003,9 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             out.push(format!("-- Event: {} trains rust ({}) --", names.join(", "), list.join(", ")));
         }
     }
+    if a.title == "1867" && a.phase.name != bg.phase.name {
+        phase_events_1867(g, b, &mut out);
+    }
     // (a private exchanged for a share closes without a line of its own: Step::Exchange's company.close!)
     let exchanged = t == "buy_shares" && raw.get("entity_type").and_then(Value::as_str) == Some("company");
     let closing: Vec<String> = a
@@ -593,7 +1023,7 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
         }
     }
     // the auction's resolutions
-    if let Round::Auction(_) = &bg.round {
+    if let (Round::Auction(_), false) = (&bg.round, auction_1867) {
         for (i, c) in a.companies.iter().enumerate() {
             let was = bg.companies[i].owner.player_id();
             let now = c.owner.player_id();
@@ -664,6 +1094,8 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
                 S::Dividend => t == "dividend",
                 S::BuyTrain => b.buy_train_acted || matches!(t, "buy_train" | "sell_shares" | "pass" | "bankrupt"),
                 S::BuyCompany => t == "pass",
+                S::RedeemShares => matches!(t, "buy_shares" | "pass"),
+                S::BuyCompanyPreloan => matches!(t, "pass" | "buy_company"),
                 _ => true,
             };
         // D&H's teleport: while its token is pending (SpecialToken blocks) Ruby's skip_steps stops there, so the
@@ -686,13 +1118,13 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
                 // (a discard pending -- another company over the train limit -- blocks Ruby's skip_steps until it's
                 // made: the skips come with the discard; so does D&H's teleport token while it is pending)
                 let teleport_pending = matches!(&a.round, Round::Operating(s1) if s1.teleport_pending);
-                if step_pos(&s2) > next_from && step_pos(&s2) < STEP_ORDER.len() && !teleport_pending {
-                    skips(bg, a, &corp, next_from, step_pos(&s2), out);
+                if step_pos(&s2) > next_from && step_pos(&s2) < steps_now().len() && !teleport_pending {
+                    skips_with(bg, a, &corp, next_from, step_pos(&s2), run_revenue(_raw, &corp), out);
                 }
             }
             _ => {
-                if step_pos(&step) < STEP_ORDER.len() || t == "discard_train" {
-                    skips(bg, a, &corp, next_from, STEP_ORDER.len(), out);
+                if step_pos(&step) < steps_now().len() || t == "discard_train" {
+                    skips_with(bg, a, &corp, next_from, steps_now().len(), run_revenue(_raw, &corp), out);
                 }
             }
         }
@@ -707,7 +1139,8 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
         let n = order.len();
         let from = s0.current_player_index;
         let t = raw_type(_raw);
-        let by_player = _raw.get("entity_type").and_then(Value::as_str) == Some("player");
+        let by_player = _raw.get("entity_type").and_then(Value::as_str) == Some("player")
+            || (a.title == "1867" && t == "place_token");
         match &a.round {
             Round::Stock(s1) if same_round && by_player => {
                 let to = s1.current_player_index;
@@ -748,6 +1181,15 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
             price_moves(bg, a, Some(&sym), out);
         }
     }
+    // 1867's export at an operating round's end (G1867::Game#or_round_finished, phases with export_train:
+    // Depot#export! writes "-- Event: A 4 train exports --")
+    if a.title == "1867" && matches!(bg.round, Round::Operating(_)) && bg.phase_has_status("export_train") {
+        let gone = bg.depot.trains.first().filter(|t| !a.depot.trains.iter().any(|x| x.id == t.id)).cloned();
+        let bought = _raw.get("train").and_then(Value::as_str) == gone.as_ref().map(|t| t.id.as_str());
+        if let (Some(t), false) = (gone, bought) {
+            out.push(format!("-- Event: A {} train exports --", t.name));
+        }
+    }
     // the rounds the move went through: every round that finished during it (the records' store_player_info
     // entries) but the first began and ended inside it -- an operating round in which no company operates (only the
     // privates pay), between a stock round and the next. Ruby's next_round! writes each one's lines.
@@ -765,6 +1207,7 @@ fn transitions(g: &SiteGame, b: &Before, _raw: &Value, out: &mut Vec<String>) {
     // the new round
     let (num, total) = match &a.round {
         Round::Operating(s) => (s.round_num, s.total_ors),
+        Round::Merger(s) => (s.round_num, s.total_ors),
         _ => (1, ors_of_phase(a)),
     };
     new_round_lines(g, &prev, super::records::round_short(&a.round), a.turn, num, total, out);
@@ -811,6 +1254,10 @@ fn new_round_lines(g: &SiteGame, prev: &str, kind: &str, turn: u32, num: u8, tot
                 out.push(format!("{} has priority deal", pname(a, a.priority_deal_player)));
             }
             out.push(format!("-- Stock Round {turn} --"));
+        }
+        "MR" => {
+            // G1867::Game#new_merger_round: round_description('Merger', round_num)
+            out.push(format!("-- Merger Round {turn}.{num} (of {total}) --"));
         }
         "OR" => {
             if prev == "SR" {
@@ -865,6 +1312,7 @@ fn home_choice_now(bg: &BaseGame, a: &BaseGame) -> bool {
 
 /// The lines of a company's turn starting (after `explain`): "X operates Y", its home station.
 pub fn turn_start(g: &SiteGame, b: &Before) -> Vec<String> {
+    IS_1867.with(|c| c.set(g.game.title == "1867"));
     let a = &g.game;
     let mut out = Vec::new();
     let before = op_corp(&b.game);
@@ -891,9 +1339,11 @@ pub fn turn_start(g: &SiteGame, b: &Before) -> Vec<String> {
             out.push(format!("{corp} must choose city for home token"));
         }
         if corp != now {
-            skips(&b.game, a, corp, 0, STEP_ORDER.len(), &mut out);
+            skips(&b.game, a, corp, 0, steps_now().len(), &mut out);
         } else if step_pos(&s.step) > 0 {
-            skips(&b.game, a, corp, 1, step_pos(&s.step), &mut out);
+            // (1867's turn starts at RedeemShares, its first step: skipped there too)
+            let from = if a.title == "1867" { 0 } else { 1 };
+            skips(&b.game, a, corp, from, step_pos(&s.step), &mut out);
         }
     }
     out
