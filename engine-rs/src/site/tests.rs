@@ -20,6 +20,9 @@ fn fixture(name: &str) -> Value {
         // game 44 (the bots renamed), where the bank breaks in OR 15.1
         "bankrupt_voluntary" => include_str!("../../site/fixtures/bankrupt_voluntary.json"),
         "bank_broken" => include_str!("../../site/fixtures/bank_broken.json"),
+        // 1867 (docs/SITE_ENGINE_RS_1867.md): copies of RL_18xx tests/fixtures/1867 (anonymised 18xx.games games)
+        "g1867_21268" => include_str!("../../site/fixtures/g1867_21268.json"),
+        "g1867_nationalization_cash" => include_str!("../../site/fixtures/g1867_nationalization_cash.json"),
         _ => panic!("no fixture {name}"),
     };
     serde_json::from_str(text).unwrap()
@@ -34,7 +37,7 @@ fn a_whole_game_replays_and_ends_as_in_ruby() {
     assert_eq!(g.end_reason(), Some("bank"));
     assert_eq!(g.result(), vec![(1, 13578), (2, 10741)]);
     let k = shadow::key_now(&mut g);
-    assert_eq!(k["v"], 1);
+    assert_eq!(k["v"], 2);
     assert_eq!(k["finished"], true);
     assert_eq!(k["acting"], json!([]));
     assert_eq!(k["entity"], Value::Null);
@@ -96,7 +99,7 @@ fn every_stored_run_is_priced_as_stored() {
 fn the_cli_keeps_its_contract() {
     let (code, v) = cli::run("version", "");
     assert_eq!(code, 0);
-    assert_eq!((v["api"].clone(), v["key"].clone(), v["engine"].clone()), (json!(2), json!(1), json!("engine-rs")));
+    assert_eq!((v["api"].clone(), v["key"].clone(), v["engine"].clone()), (json!(2), json!(2), json!("engine-rs")));
     assert_eq!(cli::run("state", "not json").0, cli::EXIT_BAD_INPUT);
     assert_eq!(cli::run("state", "{}").0, cli::EXIT_BAD_INPUT);
     assert_eq!(cli::run("nope", "{}").0, cli::EXIT_BAD_INPUT);
@@ -344,4 +347,149 @@ fn the_snapshot_names_the_company_up_for_auction() {
     assert_eq!(at(5), None);
     assert_eq!(at(6), Some(json!("CA")));
     assert_eq!(at(7), None);
+}
+
+// ------------------------------------------------------------------------------------------------ 1867
+
+#[test]
+fn g1867_a_whole_game_replays_and_ends_as_in_ruby() {
+    let data = fixture("g1867_21268");
+    let mut g = SiteGame::load(&data).unwrap();
+    g.run_to(None);
+    assert!(g.stopped.is_none(), "{:?}", g.stopped);
+    assert!(g.finished());
+    // Ruby's game_end_check: the final phase's trigger outranks the bank's (GAME_END_TIMING_PRIORITY)
+    assert_eq!(g.end_reason(), Some("final_phase"));
+    let site: Vec<(u32, i32)> = data["result"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.parse().unwrap(), v.as_i64().unwrap() as i32))
+        .collect();
+    for (id, v) in site {
+        assert!(g.result().contains(&(id, v)), "player {id}: {:?}", g.result());
+    }
+    let k = shadow::key_now(&mut g);
+    assert_eq!(k["v"], 2);
+    // the v2 fields 1867 has (and only those): loans, the national, trainless majors
+    assert!(k["loans_left"].is_u64());
+    assert!(k["national"]["tokens"].is_array());
+    assert!(k["trainless"].is_array());
+    assert!(k.get("merger").is_none());
+    assert!(k["corps"].as_object().unwrap().values().all(|c| c["loans"].is_u64()));
+    // Ruby's @corporations at the end: the majors only (every minor was nationalized in phase 8), never the national
+    let corps: Vec<&String> = k["corps"].as_object().unwrap().keys().collect();
+    assert!(!corps.iter().any(|c| *c == "CN"));
+    assert_eq!(corps.len(), 8, "{corps:?}");
+}
+
+#[test]
+fn g1867_two_players_and_grid_market_are_unsupported() {
+    let mut data = fixture("g1867_21268");
+    data["players"] = json!(data["players"].as_array().unwrap()[..2].to_vec());
+    let e = SiteGame::load(&data).err().unwrap();
+    assert_eq!(e, "unsupported: 1867 for 2 players");
+    let mut data = fixture("g1867_21268");
+    data["settings"] = json!({"optional_rules": ["grid_market"]});
+    assert_eq!(SiteGame::load(&data).err().unwrap(), "unsupported: optional rule grid_market");
+    assert!(super::TITLES.contains(&"1867"));
+    assert_eq!(cli::version()["titles"], json!(["1830", "1867"]));
+    assert_eq!(cli::version()["key"], 2);
+}
+
+/// The game up to (and without) action `id`, and that action as recorded.
+fn g1867_before(name: &str, id: i64) -> (SiteGame, Value) {
+    let data = fixture(name);
+    let a = data["actions"].as_array().unwrap().iter().find(|a| a["id"] == json!(id)).unwrap().clone();
+    let mut g = SiteGame::load(&cli::truncate(&data, Some(id - 1))).unwrap();
+    g.run_to(None);
+    assert!(g.stopped.is_none());
+    (g, a)
+}
+
+#[test]
+fn g1867_act_adds_rubys_step_auto_actions() {
+    // NO's run (a minor with no station to place: G1867::Step::Token passes for it), and CA's train ending the OR
+    // (the merger round's first minors pass: G1867::Step::Merge with nothing to convert or merge)
+    for id in [170, 181] {
+        let (mut g, a) = g1867_before("g1867_nationalization_cash", id);
+        let recorded: Vec<Value> = a["auto_actions"].as_array().unwrap().iter().map(|x| json!({"type": x["type"], "entity": x["entity"]})).collect();
+        // (a page posts the exact router's run, not the recorded one: it pays at least as much)
+        let bare = if a["type"] == "run_routes" {
+            super::menu::auto_route(&mut g)["action"].clone()
+        } else {
+            super::json::strip_meta(&a)
+        };
+        let (posted, _) = g.act(&bare).unwrap_or_else(|e| panic!("action {id}: {e}"));
+        let mine: Vec<Value> = posted["auto_actions"].as_array().cloned().unwrap_or_default().iter().map(|x| json!({"type": x["type"], "entity": x["entity"]})).collect();
+        assert_eq!(mine, recorded, "action {id}");
+        // the position after a recorded move equals the replay's
+        if a["type"] != "run_routes" {
+            let (mut r, _) = g1867_before("g1867_nationalization_cash", id + 1);
+            assert_eq!(shadow::key_now(&mut g)["corps"], shadow::key_now(&mut r)["corps"], "action {id}");
+        }
+    }
+}
+
+#[test]
+fn g1867_act_refuses_what_the_generator_does_not_offer() {
+    // the opening auction: a bid off the $5 grid, and one below the minimum
+    let first = fixture("g1867_21268")["actions"].as_array().unwrap().iter().find(|a| a["type"] == "bid").unwrap()["id"].as_i64().unwrap();
+    let (mut g, a) = g1867_before("g1867_21268", first);
+    assert_eq!(a["type"], "bid");
+    let mut off = super::json::strip_meta(&a);
+    off["price"] = json!(a["price"].as_i64().unwrap() + 2);
+    let e = g.clone().act(&off).err().unwrap();
+    assert!(e.starts_with("refused: Price must be a multiple of $5"), "{e}");
+    let mut low = super::json::strip_meta(&a);
+    low["price"] = json!(5);
+    let e = g.clone().act(&low).err().unwrap();
+    assert!(e.starts_with("refused: Price must be between"), "{e}");
+    // the recorded bid is accepted, and posted as the site stores it
+    let (posted, _) = g.act(&super::json::strip_meta(&a)).unwrap();
+    assert_eq!(posted["price"], a["price"]);
+    assert!(posted.get("auto_actions").is_none());
+}
+
+#[test]
+fn site_interplayer_purchases_read_rubys_phase_status() {
+    // Ruby's PHASES status (the site's g_1830/game.rb and g_1867/game.rb): can_buy_companies_from_other_players in
+    // 1830's phases 2-4 only, never in 1867
+    let g30 = SiteGame::load(&fixture("router_d_trains")).unwrap();
+    let ruby_1830: &[(&str, &[&str])] = &[
+        ("2", &["can_buy_companies_from_other_players"]),
+        ("3", &["can_buy_companies", "can_buy_companies_from_other_players"]),
+        ("4", &["can_buy_companies", "can_buy_companies_from_other_players"]),
+        ("5", &[]),
+        ("6", &[]),
+        ("D", &[]),
+    ];
+    let mut game = g30.game.clone_for_search();
+    for (phase, want) in ruby_1830 {
+        game.phase.name = phase.to_string();
+        let mut have = game.ruby_phase_status();
+        have.sort();
+        let mut want = want.to_vec();
+        want.sort();
+        assert_eq!(have, want, "1830 phase {phase}");
+    }
+    let g67 = SiteGame::load(&fixture("g1867_21268")).unwrap();
+    let mut game = g67.game.clone_for_search();
+    for phase in ["2", "3", "4", "5", "6", "7", "8"] {
+        game.phase.name = phase.to_string();
+        assert!(!game.ruby_phase_status().contains(&"can_buy_companies_from_other_players"), "1867 phase {phase}");
+    }
+}
+
+#[test]
+fn key_v2_lists_the_1830_auction_bids() {
+    // the waterfall auction of router_d_trains: after its first bid on a later private, the key has it
+    let data = fixture("router_d_trains");
+    let first_bid = data["actions"].as_array().unwrap().iter().find(|a| a["type"] == "bid").unwrap()["id"].as_i64().unwrap();
+    let mut g = SiteGame::load(&cli::truncate(&data, Some(first_bid))).unwrap();
+    g.run_to(None);
+    let k = shadow::key_now(&mut g);
+    let a = &k["auction"];
+    assert!(a["bids"].as_array().is_some_and(|b| !b.is_empty()) || !a["lot"].is_null(), "{a}");
+    assert!(a.get("dutch").is_none());
 }
