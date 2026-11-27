@@ -2597,14 +2597,18 @@ A side in `eval_head_to_head.py`'s grammar (a `+`, `#` or `:` part) is searched;
 Seat arrangements, starts, scoring and summaries are `eval_generic.py`'s; searched decisions of a worker's games run in
 lockstep (`--games-per-task` games each), on one generic server per checkpoint of a searched side with `--server`.
 The searched side plays the most visited move (`--softpick N`: visit-sampled for its first N decisions per game).
+Memory: a 400-readout 1867 tree holds ~75 MB of positions (~185 KB a node; ~50 MB left after the move's subtree is
+kept), so a game keeps its searched side's tree only for that side's next decision -- a worker with 8 games peaks
+around 8 trees, ~0.6 GB: ~10 GB for the 16 workers below. The worker side (tree + inputs, ~0.5 ms a leaf) gives 16
+workers x 8 games x 8 leaves per round, more than one GPU's two forwards per leaf take (~5k leaves/s estimated).
 The run's GPU commands (u2000, 4 players; `R=model_checkpoints_generic_pg/gpg1867_a4_20261122`):
 
 ```bash
 S="generic:$R/learner/2000.pth+generic:$R/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5"
 uv run python scripts/eval_generic.py --title 1867 --num-players 4 --a-seats 2 --games 240 --server \
-  --workers 32 --games-per-task 8 --match "$S" "$R/learner/2000.pth@0.5" --out logs/eval/g1867_search_u2000_2v2
+  --workers 16 --games-per-task 8 --match "$S" "$R/learner/2000.pth@0.5" --out logs/eval/g1867_search_u2000_2v2
 uv run python scripts/eval_generic.py --title 1867 --num-players 4 --a-seats 1 --games 240 --server \
-  --workers 32 --games-per-task 8 --match "$S" "$R/learner/2000.pth@0.5" --out logs/eval/g1867_search_u2000_1v3
+  --workers 16 --games-per-task 8 --match "$S" "$R/learner/2000.pth@0.5" --out logs/eval/g1867_search_u2000_1v3
 ```
 
 `ptemp=0.5` = the run's `learner_temperature` (the priors are the policy the run evaluated); the bots' 1830 finding
@@ -2629,7 +2633,7 @@ title; needs the title's `--title-policy`, whose checkpoint is the searched poli
 (`generic_search.BOT_SEARCH`: mean Q, c_puct 0.05, 8 leaves per batch, dedupe) at 400 readouts on the critic's score
 head, priors at `--title-policy`'s T unless `:ptemp=`; `self` instead of a critic searches with the policy's own value
 heads. Each decision is searched in-process on the service's CPU (the connector thread waits for it: ~4 s at 400
-readouts with 4 torch threads, table below); the tree is kept after the bot's move (the 4 most recent games) and
+readouts with 4 torch threads, table below); the tree is kept after the bot's move (the 3 most recent games) and
 searched on when the site's game comes back at its root (the same bot moving again; action dicts compared without the
 site's `id` / `user` / `created_at`), adding the readouts to the inherited visits as the eval's searched side does. The
 move is the most visited Ruby-safe move (the MajorTrainless dead end is never played while another move exists), an
@@ -2665,8 +2669,9 @@ CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python scripts/benc
 
 * A kept tree is used only when the game is exactly at its root: moves by other seats (or Ruby's auto actions that
   differ from our forced moves) start a fresh tree; the 1830 autoplay instead walks its tree down the moves played.
-* The 1822 family's trees build and search (`an_1822_tree_is_the_generators_game`), but its decider
-  (`g1822_acting_player`) is not checked against the moves' entities as 1867's is, and no 1822 eval was run.
+* The 1822 family's trees build and search (`an_1822_tree_is_the_generators_game`); their decider agreed with the
+  controller of every recorded player / corporation action of two 1822 and two 1822CA fixture games (~5,000
+  decisions, a scratch check, not a test; company-ability actions not resolved by it). No 1822 eval was run.
 * A move the engine refuses inside a search (a generator bug) fails the worker's searches; `eval_generic.py`'s
   policy-only sides end such a game as `rejected_move`.
 

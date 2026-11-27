@@ -87,10 +87,11 @@ def test_the_1830_path_refuses_1867():
         lambda: game.factored_legal_indices(),
         lambda: game.apply_action_index(0, None),
         lambda: game.price_range_for_index(0),
-        lambda: engine_rs.RustMCTSPlayer(game),
     ):
         with pytest.raises(RuntimeError, match="generator"):
             call()
+    # The search tree takes 1867's generator moves (mcts.rs TreeMoves::Generator, 2026-11-27).
+    assert engine_rs.RustMCTSPlayer(game).legal_action_indices_at_root() == game.rl_legal_indices()
     with pytest.raises(RuntimeError, match="no generator layout"):
         new_game("1830", 4)._game.rl_legal_indices()
 

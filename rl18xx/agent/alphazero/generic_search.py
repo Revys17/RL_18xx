@@ -282,6 +282,11 @@ class GenericSearchPlayer:
     def tree(self):
         return self._rust_player
 
+    def release(self) -> None:
+        """Drop the tree (a 400-readout 1867 tree holds ~75 MB of positions); the next :meth:`follow` builds one."""
+        self._rust_player = None
+        self._log = None
+
     def legal(self) -> list:
         return [int(i) for i in self._rust_player.legal_action_indices_at_root()]
 

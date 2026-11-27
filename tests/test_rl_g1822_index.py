@@ -143,10 +143,11 @@ def test_the_1830_path_refuses_the_family(title):
         lambda: game.factored_legal_indices(),
         lambda: game.apply_action_index(0, None),
         lambda: game.price_range_for_index(0),
-        lambda: engine_rs.RustMCTSPlayer(game),
     ):
         with pytest.raises(RuntimeError, match="generator"):
             call()
+    # The search tree takes the family's generator moves (mcts.rs TreeMoves::Generator, 2026-11-27).
+    assert engine_rs.RustMCTSPlayer(game).legal_action_indices_at_root() == game.rl_legal_indices()
 
 
 @pytest.mark.parametrize("title", list(LAYOUTS))

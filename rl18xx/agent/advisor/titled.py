@@ -59,7 +59,7 @@ TITLES = {"1867": (3, 6)}
 SITE_FIELDS = ("id", "created_at", "user")
 #: Searched games whose tree the bots keep after their move (LRU): the next search of that game starts from the
 #: chosen move's subtree when the game is still at its root (the same bot moving again).
-KEPT_TREES = 4
+KEPT_TREES = 3  # ~50-75 MB each at 400 readouts
 
 
 def titled_problem(game: dict) -> Optional[str]:

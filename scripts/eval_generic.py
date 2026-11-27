@@ -227,6 +227,11 @@ def play_games(game_indices: list, settings: dict) -> list:
         by_side = defaultdict(list)
         for i, (g, _) in enumerate(pending):
             by_side[g.seat_models[decider_seat(g.raw, g.seating)]].append(i)
+        for side, rows in by_side.items():
+            for i in rows:  # a searched side's tree is kept only for its own next decision (~75 MB at 400 readouts)
+                for other, player in pending[i][0].trees.items():
+                    if other != side:
+                        player.release()
         searched = [(side, i) for side in search_specs for i in by_side.pop(side, [])]
         policy_rows = sorted(i for rows in by_side.values() for i in rows)
         enc = encode_batch([pending[i][0].raw for i in policy_rows]) if policy_rows else None
