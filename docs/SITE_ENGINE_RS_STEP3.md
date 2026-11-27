@@ -1,6 +1,6 @@
 # The site on engine-rs, step 3a: Rust decides 1830 and 1867 moves
 
-Status: **design, 2026-11-27** (branch `site/engine-rs-step3`, RL_18xx worktree `.claude/worktrees/site-engine-step3`,
+Status: **design 2026-11-27; package A built the same day** (§15: 00e8bf6, 3bb8916, e66ba2c and after) (branch `site/engine-rs-step3`, RL_18xx worktree `.claude/worktrees/site-engine-step3`,
 on `site/engine-rs-1867` b4b2391; first commit **9fc1b38**, the 1822 neutrality pin, §9.1). Approved by Caleb ("Just
 move to the Rust engine", "yes yes yes" to step 3): his site (18xx.revys.net, `rl18xx-next`) moves from the Ruby/Opal
 engine to engine-rs, keeping only the titles engine-rs implements (1830, 1867). Steps 1 and 2 (docs/SITE_ENGINE_RS.md,
@@ -183,10 +183,27 @@ site_engine move {"game": <site game JSON, every raw action, chat included>, "ac
                 "manually_ended": bool, "game_end_reason": null | "...", "last_game_action_id": n},
       "key": <shadow key v2 after the move>, "ms": n}
 site_engine start {"game": ...}  -> {"state": ..., "key": ...}          (the opening position: start_game!)
-site_engine view  {"game": ...}  -> {"view": <the bot view facts, §8.1>, "key": ...}
+site_engine view  {"game": ..., "upto": <id>?}  -> {"view": <the bot view facts, §8.1>, "key": ...}
 ```
 
-Exit codes as K3 (0 a verdict, refusals included; 2 bad input; 3 unsupported; 101 a panic). `created_at` stays the
+`view` as built: `{finished, error, entity: {id, type, player}, step, actions, acting, trains: [[sym, [{id, name}]],
+...], depot: [{id, name}]}` -- bot_view's values but `last_id` and the `status` half of `finished` (the server's);
+`trains` as `[sym, list]` pairs in Ruby's `engine.corporations` order (B rebuilds the Ruby hash in that order);
+`depot` is Ruby's `depot.depot_trains`. `acting` of a finished game is Ruby's `active_players_id` at its best guess
+(a manual end: the players to act when it ended; otherwise every player not bankrupt): B's `bot_view_compare.rb`
+says whether it matters.
+
+**As built (A, 00e8bf6)**: the input is `{"game", "action", "user", "now"}` (`now`: the server's `Time.now.to_i`; the
+posted `created_at`, if any, wins as in Ruby's `from_h`; posted auto actions are always ignored, `opts` is not read);
+`error` carries the engine's words without the `refused: ` prefix; `state` also has `stopped` (null, or the replay's
+stop after an undo / redo); `posted_autos` is set only when the posted list differs from Rust's. The stored action is
+Ruby's `to_h`: `user` only when the action's entity has a player and the user isn't that player, the type's own
+arguments (Ruby's `args_to_h` keys; nils dropped; a bundle's `percent` filled in), Rust's auto actions each with
+`created_at` = `now`, no id, no user. A stored game whose replay stops is exit 3 (`unsupported: the replay stopped at
+action N: ...`: B keeps such a game on Ruby, §3.4); exit **4** is an `internal:` error the engine caught itself (e.g.
+the stored action failing to replay as decided); the server treats 2 / 3 / 4 / 101 / a timeout alike (503).
+
+Exit codes as K3 (0 a verdict, refusals included; 2 bad input; 3 unsupported; 4 internal; 101 a panic). `created_at` stays the
 server's (Ruby's `Action.create`). An undo / redo is accepted as Ruby accepts it (no check: Ruby's `process_action`
 returns at once for them), the state is the reloaded game's. `end_game` (manual end), `message` and `log` as the site
 layer already handles them; `program_*` actions as Ruby's `Step::Program` (offered per `available_programmed_actions`; its one check: a
@@ -330,6 +347,17 @@ change what the site accepts beyond the binding decisions.
 A1's first measurement: §2.3's live probe re-run with this check over every corpus; the target is 0 refusals of stored
 moves other than R9's kind, each one listed.
 
+**As built (`src/site/check1830.rs`)**: the first run refused 110 of :9301's 149,335 stored moves, every one a move
+Ruby takes that no menu offers: a sale whose bundle isn't the menu's (the president's certificate alone, or a partial
+president's bundle: Ruby's `SellShares.from_h` builds `ShareBundle.new(shares, percent)` from whatever was posted and
+asks `can_sell?` of it), a company buying another player's private in an operating round (`purchasable_companies` is
+any player's), another president's company's train, M&H's exchange on another player's turn (a company's step never
+blocks: `Round#active_step(company)`), a crowded company's discard while another is first. The check now accepts those
+as Ruby does: a sale is any distinct set of the seller's shares of one corporation whose percent is their sum (or less
+by whole shares with the president's certificate among them) for a corporation and percent the menu sells, with
+`can_dump?` when the certificate is in it; the cross-player set has the four others. Then: **0 refused** of 149,335
+(:9301 1830) and 11,747 (production 1830); 1867 (generator, unchanged) 5,019 and 6,742.
+
 ### 5.3 (3) Programs and auto actions (`src/site/programs.rs`)
 
 After every move (chat included, as Ruby's `process_action`), Ruby's loop: `until (actions = round.auto_actions).empty?`
@@ -351,6 +379,14 @@ ported. The wasm runs the same code, so Rust pages in games with programs act at
 programs on Rust (§10). Judged on every stored action carrying auto actions (§2.4: 228 in 1830, 826 in 1867), on
 generated games with programs replayed by Ruby, and live by the Ruby check (R8 is the only expected class).
 
+**As built (`src/site/programs.rs`)**: `SiteGame` keeps Ruby's `@round.players_history` (`stock_history`: a player's
+key when their turn starts or an action of theirs is tracked, cleared at each of their turns, every entity the round
+visits; 1867's internal `Par` of a minor won at auction tracked with no id and the move's time) and each program's
+`(id, created_at)` (`program_meta`: Ruby's `action < program` compares ids, else times). Every stored action with auto
+actions in the corpora is reproduced field for field (created_at aside): :9301 1830 123 / 123, production 1830 101 /
+101, :9301 1867 260 / 260, production 1867 469 / 469 (the 1867 counts are the kept actions; the rest of §2.4's are in
+undone branches).
+
 ---
 
 ## 6. (4) Runs: checked and priced by engine-rs
@@ -370,6 +406,19 @@ may post a run drawn by hand: games with `auto_routing: false` open on Rust (C, 
 
 `lib/run_revenue.rb` stays for the titles Ruby decides; for authority titles the server uses Rust's pricing
 (`repriced`, the `revenue_mismatch` row) and never builds a Ruby engine.
+
+**As built (`src/site/route_check.rs`)**: the routes are rebuilt from their `connections` with Ruby's own walk
+(`Path#walk` pruned to the posted hex chain; `find_matching_chains` over the first and last hexes' nodes in
+`tile.nodes` order; one chain: the first with a station of the company sharing no track with the other routes;
+several: `find_pairwise_chain`, the posted `nodes` breaking ties) and, as `compute_other_paths` does while the run's
+routes are being built, **last first**, each excluding the track of those after it. Every stored run of the corpora
+checks and prices as stored: 1867 1,315 / 1,315 field for field (train, revenue, `revenue_str`, `hexes`, `nodes`);
+1830 every run stored since the server prices runs (310 on :9301) field for field, and the older records differ only
+where Ruby's own format changed since (routes stored before c57803b: old run strings, stale `hexes`, no `nodes`: 1,426;
+between c57803b and lib/run_revenue.rb: the page's claimed `revenue_str`: 568): the revenue equal on every one of the
+12,877 stored 1830 runs.
+Not modelled (none in 1830's or 1867's tiles): lanes, local trains, intra-tile ambiguous connections (refused as
+`unsupported`), double towns, the off-centre town rule of `check_overlap`.
 
 ---
 
@@ -419,6 +468,11 @@ and `depot` are new facts in `site_engine view`. Check (B): `scripts/engine_rs/b
 Rust's at every position of every corpus game, byte-equal JSON; then live on the scratch stack with the dev bots.
 The bots' backends (:5004 prod, :5014 dev) need no change. **No contract change is proposed.**
 
+A's check (read-only, production's bot API, the files deleted after): `site_engine view` of each of production's 31
+games (8 active, 23 finished) equals the `view` the bot API serves for it, field for field (entity, step, actions,
+acting, the trains in Ruby's order, the depot; a finished game's `acting`: a bankruptcy's is the bankrupt president,
+a round-end's every player not bankrupt). B's `bot_view_compare.rb` still checks every position.
+
 ### 8.2 `POST /api/bot/engine`
 
 It answers for games of another site (18xx.games, 1830 only): who that site's engine waits for and how it stores a
@@ -451,8 +505,25 @@ All three pins (1830, 1867, 1822) must pass unchanged at every commit of A.
 | # | File, item | Edit | Status |
 |---|---|---|---|
 | N3 | `src/neutrality.rs` | the 1822 pin (tests only) | **9fc1b38** |
-| G1 | `src/map.rs`: `compute_corp_graph`, `walk_from_node`, `walk_into_hex`, `is_converging_exit`, `is_city_blocked` | the corporation-graph speed-up, speed only (§11.3); plus, in `map.rs`'s test module, the current walk kept verbatim as `compute_corp_graph_reference` and a differential test | planned, its own commit |
+| G1 | `src/map.rs` (as built, function by function below) | the corporation-graph speed-up, speed only (§11.3) | its own commit (§15) |
 | V3 | none identified | any `fn` → `pub(crate) fn` the Programmer, the route check or the 1830 move check turns out to need is listed here, function by function, before its commit | — |
+
+G1 as built, every item of `src/map.rs` it touches:
+
+| Item | Change |
+|---|---|
+| `compute_corp_graph` | body only (signature unchanged): calls `compute_corp_graph_flat`; under `cfg(test)` also the reference, asserting the two graphs equal (`graph_cross_check`, on unless `GRAPH_CROSS_CHECK=0`) |
+| new `compute_corp_graph_flat` | the token walks on the flat state, `route_available` / `route_train_purchase` as before, the result converted back to today's `CorpGraph` |
+| new `FlatCtx` (`new`, `n_nodes`, `node`, `node_id`), `FlatWalk` (`new`, `path_visited`, `set_path`, `clear_path`), `bit_get` / `bit_set` / `bit_clear`, `all_present`, `NO_NBR`, `HEX_PRESENT` | the flat context (neighbour per edge, converging-exit mask, node numbering, `is_city_blocked` per city node) and the walk's integer state |
+| `walk_from_node`, `walk_into_hex` | index-based: the same control flow on the flat state (replace the String-keyed ones) |
+| new `tokenable_cities_of` | the tokenable-city rule moved out of `compute_corp_graph` verbatim (same conditions, same sort) |
+| new `compute_corp_graph_reference`, `walk_from_node_reference`, `walk_into_hex_reference` | the walk as it was, verbatim (renamed only): the fallback for a token on a hex the board doesn't index (never on a real board) and what the cross-check compares with. Not test-only (a deviation from §11.3's plan: the fallback needs it) |
+| `is_converging_exit`, `is_city_blocked` | unchanged (moved above the flat walk, which precomputes them) |
+| tests: `graph_cross_check`, `GRAPH_CROSS_CHECKS`, `assert_same_graph` (`cfg(test)`); `the_flat_walk_equals_the_reference_on_generated_1867_games`; `the_flat_walk_equals_the_reference_on_a_corpus` (ignored, `GRAPH_CORPUS`) | the differential checks |
+
+Unchanged: `GraphCache`, `get_or_compute`, `CorpGraph`, `TokenableCity`, `NodeId`, `NodeType`, `corp_has_token_in_city`,
+`TILE_RESERVATION*`, every caller, `g1867/graph.rs`, `g1867/fastwalk.rs`, `g1822/*`. No V3 (no visibility change): the
+Programmer, the route check and the 1830 check use only `pub(crate)` items that already were.
 
 Not edited: `action_index.rs`, the encoder, `decode`, `POLICY_SIZE` 26537, `src/rl`, the g1867 / g1822 layouts and
 generators, `mcts.rs`, `mcts_lockstep.rs` (the training session's subagent is editing those). No `site_rules` branch:
@@ -527,6 +598,15 @@ walks, the conversion; signature unchanged), `walk_from_node` and `walk_into_hex
 `TokenableCity`, `NodeId`, `NodeType`, `corp_has_token_in_city`, `TILE_RESERVATION*`, every caller (`game.rs`,
 `steps.rs`, `factored.rs`, `rounds/merger.rs`), and 1867's and 1822's own graph walks (`g1867/graph.rs`,
 `g1867/fastwalk.rs`, `g1822/*`).
+
+**As built (G1, §9.2's list)**: as planned, but the reference walk lives beside the flat one (not only in tests): it
+is the fallback for a token on a hex the board doesn't index, the one input the flat context doesn't number. In
+tests every `compute_corp_graph` computes both and asserts them equal (`graph_cross_check`), so the three neutrality
+pins and every other test are differential tests; `the_flat_walk_equals_the_reference_on_generated_1867_games` adds
+1867 generator walks (thousands of graphs); the ignored `..._on_a_corpus` (scratch, `GRAPH_CORPUS`) compared every
+company's graph at every position of :9301's 1867 games, production's 1830 and 1867 games, 150 :9301 1830 games,
+1119 / 1263 / 1269 / gen-2053 and the site fixtures: **64,788 positions, 697,280 graphs equal**. Every position's
+shadow key of those four games and :9301's 1867 games is the same under both builds (18 / 18). Timings in §15.
 
 **Verification**: the current code kept verbatim in the test module as `compute_corp_graph_reference`; a differential
 test comparing the two `CorpGraph`s (every field, sorted) for every company at every position of the three pins'
@@ -614,9 +694,9 @@ covers the time it takes.
 
 | Contract | From → to | Step 3a |
 |---|---|---|
-| K1' WasmGame API 3 | A → C | API 2 + `features: ["programs", "route_check"]`; `act` makes programs' auto actions and accepts any valid run; `details` gains liquidity; checkpoints bounded |
+| K1' WasmGame API 3 | A → C | API 2 + `features: ["programs", "route_check", "authority"]`; `version().api` is **3** (C's worker must accept it before B serves the package to pages: today's worker falls back to Opal unless api is 2); `act` is the server's decision (the 1830 menu check, the route check, the Programmer) and returns the action as the server stores it (id, `created_at` from the page's clock, Rust's `auto_actions`); `details.sheet.liquidity` `{player id: n}`; `tiles.left` of an unlimited tile from Ruby's supply; `lastRun` as Opal's; 1867's merger `partners` in Ruby's order; at most 8 checkpoints |
 | K2 package files | A → B, C | unchanged names |
-| K3' `site_engine` | A → B | + `move`, `start`, `view` (§3.2); exit codes unchanged |
+| K3' `site_engine` | A → B | + `move`, `start`, `view` (§3.2, as built there); exit 4 added (an internal error the engine caught); `act` now makes the auto actions (its `add_auto_actions` ignored) |
 | K4 key v2 | A ↔ B | unchanged; now also Rust's key stored with each Rust-decided move |
 | K5, K6 build, vendoring | A → B | unchanged (`site/engine-rs-step3`, `PINNED`) |
 | K7' boot / titles API | B → C | `engine.rust.authority: [titles]` |
@@ -694,6 +774,14 @@ the production steps (§12.4), the parent's.
   worst move is 0.5 ms warm, 99 ms cold).
 - **POST /api/bot/engine** after 3b (§8.2) and **engine ownership** (the site pins this branch until the training
   session merges it with Caleb's OK) are the parent's to settle.
+- **Known gaps after A (2026-11-27)**: generated games are not yet replayed through the site's Ruby by A (B's
+  `ruby_verdicts.rb`, the Ruby check); the route check models neither lanes, local trains, intra-tile ambiguous
+  connections (refused `unsupported`), double towns nor `check_overlap`'s off-centre town rule (none in 1830's or
+  1867's tiles); 1867's 5+5E through Toronto / Montreal is priced by the replay pricer (R6); a stored game whose replay
+  stops is exit 3 (none today: §2.5); the bot view is matched on production's 31 games (23 finished), B's
+  comparison covers every position; `site_engine serve` not built (§3.6); a 1830 move the menus don't
+  offer and that isn't in §5.2's cross-player set is refused even where Ruby would take it (none in the 172,843 stored
+  moves; the client's `engine_report` rows show any live one).
 
 ## 15. The record
 
@@ -701,3 +789,44 @@ the production steps (§12.4), the parent's.
   neutrality walks (§9.1), its gate green; this doc. The measurements of §2 and §11 were made with scratch tools on a
   copy of b4b2391's engine-rs (`$RUST3/design`, not committed); production's exported games were read through the bot
   API only and deleted with the scratch.
+- **2026-11-27, A1-A3 (00e8bf6)**: `site_engine move` / `start` / `view` (K3' as built: §3.2), the 1830 move check
+  (§5.2), the route check (§6), the Programmer (§5.3), `act` = the authority's decision (WasmGame API 3, features
+  `programs`, `route_check`, `authority`), `site_replay --authority`. Corpus: every kept move of every game decided at
+  its position as `move` decides it -- :9301 1830 149,335 / 149,335, 1867 5,019 / 5,019; production (read-only export,
+  deleted after) 1830 11,747 / 11,747, 1867 6,742 / 6,742; auto actions and runs as §5.3 and §6 say. No edit outside
+  src/site. Package published: `$RUST3/pkg/00e8bf63f6fa`.
+- **2026-11-27, A5 (3bb8916)**: the client gaps (§10): `details.sheet.liquidity` (Ruby's `Game#liquidity`), an
+  unlimited tile's count from Ruby's supply, ports:last_run rebuilt as Opal's map does (the train's Ruby owner: a
+  rusted train's is nil, a discarded one's the depot; lays recorded at the turn they were made), 1867's merger
+  partners in Ruby's `mergeable_candidates` order (`g1867/order.rs`), at most 8 `at` checkpoints without their raw
+  actions. Against the Opal goldens (315 1830 games, 15 1867): last run 47,458 / 47,458 and 2,065 / 2,065 (were 93%,
+  95.4%), liquidity 32,805 / 32,805 and 1,084 / 1,084, tile counts 384,422 / 384,422 and 18,428 / 18,428, 1867 menus
+  10,578 / 10,704 (was 10,557; the rest: words the client fills in, R2's stale-graph minor). wasm memory after opening
+  1119 in the client's batches of 80: 98.8 -> 20.0 MB (1269: 29.1 -> 22.6 MB); `at` 5-31 ms.
+- **2026-11-27, G1 (e66ba2c)**: the corporation graph's walk on flat arrays, its own commit, §9.2's list as built
+  (§11.3 "As built"). Every graph computed in the tests is checked against the walk as it was (the three neutrality
+  pins unchanged); the scratch corpus run: 697,280 graphs at 64,788 positions equal. Timings (cores 24-31,56-63,
+  load ~35, min of 3; before -> after): `site_engine state` gen-2053 6,207 -> 193 ms, 1269 51 -> 50 ms, 1119 21 ->
+  20 ms, 1263 8 -> 9 ms (real games' graphs were never the cost); every move of gen-2053 decided as `move` decides
+  it (`site_replay --authority`) 27.1 -> 2.9 s (28 -> 3 ms a move). Package published: `$RUST3/pkg/e66ba2c3c233`.
+- **2026-11-27, A6**: generated 1867 games (`site_replay --generate 12 --seed 3001`, 3-6 players, all finished)
+  decided move by move: 13,380 / 13,380 accepted, their 407 step passes equal, 1,003 router runs pass the route check
+  at the router's price. Native = wasm: the last 3 engine moves of 62 games (the fixtures, :9301's 1867 games, 40
+  1830 games) decided by the wasm's `act` and by `site_engine move` on the game cut before them: 178 / 178 equal
+  (stored action with its auto actions, and the key after). The bot views (§8.1): production's 31 equal. The Opal
+  goldens re-run at e66ba2c: 1830 snapshots 82,083 / 82,083, menus 322,145 / 322,150, tile options 42,082 / 42,127,
+  restartInfo 82,056 / 82,083, last run, liquidity and tile counts 100%, auto routes 7,562 / 7,562, log lines
+  171,590 / 171,590; 1867 as A5. Not done here: generated games replayed through the site's Ruby (no Ruby run in A:
+  B's `ruby_verdicts.rb` and the Ruby check of §4 judge Rust's moves by Ruby).
+- **2026-11-27, 1088b50**: the bot view's `acting` of a game a bankruptcy ended (§8.1): production's 31 views equal.
+  `site_engine move` on each game's last engine move (wall, spawn included, min of 3, load ~39): 1119 16 ms, 1263
+  8 ms, 1269 49 ms, :9301 1218 (1867) 33 ms, gen-2053 190 ms. **Final package: `$RUST3/pkg/1088b500d2f8`**
+  (`pkg/current`; `site_engine version`: api 3, key 2, features site, programs, route_check, authority).
+- **2026-11-27, the gate at 1088b50**: `cargo test --release --no-default-features --features python` 273 passed / 0
+  failed / 11 ignored and `--features site` 305 / 0 / 11 (the 1830, 1867 and 1822 neutrality pins unchanged, every
+  graph cross-checked), `cargo check --target wasm32-unknown-unknown` with `wasm,site-titles` and with `wasm`, the
+  default `cargo check`: clean; `uv sync` and the full `pytest tests/` in this worktree's venv (the wheel of e66ba2c:
+  1088b50 changed only site code): **1,822 passed, 7 skipped, 0 failed** (25:51). Edits outside src/site in A: N3
+  (9fc1b38) and G1 (e66ba2c), as §9.2 lists them; nothing in mcts.rs, mcts_lockstep.rs, the policy layouts or
+  `site_rules`.
+
