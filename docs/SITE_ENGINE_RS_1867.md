@@ -433,6 +433,7 @@ differently on native):
 
 V2's other candidates (`merger_tokens_above_limits`, `merger_token_hex_count`, `g1867_wire_tile_id`,
 `token_slot_for`) were not needed. No `site_rules` branch was added. Both neutrality pins pass at every commit.
+After the rebase onto origin/master 995ccef (§13.3) the three are P2 **c2d9359**, V2 **589b1e0**, P3 **2a5b254**.
 
 ### 5.4 Known Ruby / Rust differences left as they are
 
@@ -870,3 +871,49 @@ both 1867 fixtures' menus against `check_move`.
 wasm32-unknown-unknown --features wasm,site-titles` and `--features wasm` clean; default `cargo check` clean; the full
 `pytest tests/` in this worktree's venv: 1,822 passed, 7 skipped, 0 failed (22 min; the Python build compiles none of the modules these commits
 change: all are behind `site`). No Python-vs-Rust parity test failed.
+
+### 13.3 Rebased onto origin/master 995ccef (2026-11-27)
+
+For the training session's review and merge, `site/engine-rs-1830` was rebased onto RL_18xx origin/master **995ccef**
+(f6a9fe5 plus the training session's docs commit: CLAUDE.md, docs/rl_model.md; no engine change) and gained its note
+(SITE_ENGINE_RS.md §11.3): the polish is now ffea71c, 10aaf36, d5deac4, and that branch's head is **f2594f8**. This
+branch's 23 commits were rebased onto f2594f8 with no conflicts, every one kept, in order, with its patch unchanged
+(`git patch-id`); `engine-rs/`, `tests/` and the Python package are byte-identical to f021d05's (the tree differs only
+in CLAUDE.md, docs/rl_model.md and SITE_ENGINE_RS.md §11). Old → new:
+
+| Old | New | Commit |
+|---|---|---|
+| 42ac72c | 6a53866 | the 1867 neutrality pin (§7) |
+| 22922a2 | f6e9f00 | this doc: the design |
+| 1879856 | c2d9359 | **P2** |
+| 50678a6 | 589b1e0 | **V2** |
+| d23c40c | c075235 | the corpus fetch by title, the reference Ruby key v2 |
+| 431ffeb | ace320f | **A1** |
+| 843460b | 699d0a2 | the build's titles |
+| 20b1a4c | de10640 | **A2** |
+| a4a08e4 | e7d523b | **A3** |
+| 86556e3 | 7a8533d | turn starts, lastRun, programInfo, meta |
+| 4caff61 | bc69944 | §5.2, the 1867 site tests |
+| d077343 | fd13efc | the generated games, the Ruby live judge |
+| 907569f | f693603 | **A4** |
+| d30120a | 3d45b41 | act cases for 1867 |
+| 105f93f | 2a5b254 | **P3** |
+| 1d9d2e7 | 5158fcb | the merger's converts, each station's city |
+| a316902 | e2832cf | §13.1 |
+| 3fdd015 | 7d622d0 | §13.2 #1, #5 |
+| 5c30e29 | 0956c6c | §13.2 #6 |
+| e5d2487 | e674fc9 | §13.2 #7 |
+| ac4f182 | 63ad95d | §13.2 #8 |
+| 9ac8c34 | 1db7f5b | §13.2 #8 |
+| f021d05 | 74fdc49 | §13.2 |
+
+Then this note: the branch's head, which rl18xx-next's dev site (:9301) is re-pinned to (its `engine-rs/` is
+1db7f5b's and 9ac8c34's byte for byte).
+
+**Gate** at 74fdc49 (§10.6; under `taskset -c 24-31,56-63 nice -n 19`, `CUDA_VISIBLE_DEVICES=`): `cargo test --release
+--no-default-features --features python` 270 passed, 0 failed, 11 ignored, and `--features site` 296 passed, 0 failed,
+10 ignored (both neutrality pins pass under both: 1830's and 1867's walks and their determinism tests); `cargo check
+--target wasm32-unknown-unknown --no-default-features --features wasm,site-titles` and `--features wasm` and the
+default `cargo check`: no errors (only the shared code's existing dead-code warnings); `uv sync` in this worktree and
+the full `pytest tests/`: 1,822 passed, 7 skipped, 2 deselected (benchmarks), 0 failed (21 min). The same numbers as
+at 9ac8c34. `site/engine-rs-1830`'s own cargo gate at d5deac4: SITE_ENGINE_RS.md §11.3.
