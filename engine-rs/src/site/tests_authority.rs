@@ -190,3 +190,27 @@ fn move_start_and_view_keep_their_contract() {
     assert!(v["entity"]["id"].is_string() || v["entity"]["id"].is_number());
     assert!(v["step"].is_string() && v["actions"].is_array() && v["trains"].is_array() && v["depot"].is_array());
 }
+
+#[test]
+fn details_carry_rubys_liquidity_and_the_supply_count() {
+    // 1830: cash alone before the second stock round (sellable_turn?), then cash and the dearest dumpable bundle
+    let data = fixture("router_d_trains");
+    let mut g = before(&data, 35);
+    let d = super::details::details(&mut g, &json!(["sheet", "tiles"])).unwrap();
+    for p in g.game.players.clone() {
+        let l = d["sheet"]["liquidity"][p.id.to_string()].as_i64().unwrap();
+        assert!(l >= p.cash as i64, "{l} < {}", p.cash);
+    }
+    let mut g = SiteGame::load(&data).unwrap();
+    g.site_log = false;
+    g.run_to(None);
+    let rich = g.game.players.iter().map(|p| super::details::liquidity(&g, p.id) - p.cash).max().unwrap();
+    assert!(rich > 0, "some shares are worth selling at the end");
+    // 1867: an unlimited tile's count is the supply's (one, more once one is upgraded over)
+    let mut g = SiteGame::load(&fixture("g1867_21268")).unwrap();
+    g.site_log = false;
+    g.run_to(None);
+    let d = super::details::details(&mut g, &json!(["tiles"])).unwrap();
+    let seven = d["tiles"]["tiles"].as_array().unwrap().iter().find(|t| t["name"] == "7").unwrap()["left"].as_u64().unwrap();
+    assert!((1..100).contains(&seven), "{seven}");
+}

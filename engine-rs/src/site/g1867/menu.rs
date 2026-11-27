@@ -579,6 +579,13 @@ fn merger_facts(g: &mut SiteGame, minor: &str, types: &[String], moves: &Moves) 
             partners.push(json!({"sym": corporation_sym, "price": price_of(g, corporation_sym), "action": w}));
         }
     }
+    // Ruby's order (Merge#mergeable_candidates: the merging companies' connected cities as Graph#compute finds them,
+    // each city's stations), not the generator's
+    let base: Vec<String> = if s.merging.is_empty() { vec![minor.to_string()] } else { s.merging.clone() };
+    let order = super::order::candidate_order(&g.game, &base);
+    let pos = |v: &Value| order.iter().position(|x| Some(x.as_str()) == v["sym"].as_str()).unwrap_or(usize::MAX);
+    partners.sort_by_key(|v| pos(v));
+    left.sort_by_key(|v| pos(v));
     out["partners"] = json!(partners);
     out["othersLeftOut"] = json!(left);
     if phase == "start" && types.iter().any(|t| t == "convert") {

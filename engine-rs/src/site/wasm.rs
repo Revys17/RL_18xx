@@ -20,6 +20,9 @@ fn parse(s: &str) -> Result<Value, JsError> {
     serde_json::from_str(s).map_err(|e| err(format!("internal: bad JSON: {e}")))
 }
 
+/// The most checkpoints a game keeps for `at`.
+const MAX_CHECKPOINTS: usize = 8;
+
 #[wasm_bindgen]
 pub struct WasmGame {
     inner: SiteGame,
@@ -74,8 +77,14 @@ impl WasmGame {
                     break;
                 }
             }
-            if self.inner.pos > 0 && self.inner.pos % 100 == 0 && self.checkpoints.last().map_or(true, |c| c.pos < self.inner.pos) {
-                self.checkpoints.push(self.inner.clone());
+            // `at`'s checkpoints: at most 8, spaced by the game's length (at least 100 actions apart); each without
+            // its raw actions (`at` takes this game's), so a long game holds ~10 MB, not ~100 (§10)
+            let spacing = self.inner.total().div_ceil(MAX_CHECKPOINTS).max(100);
+            if self.inner.pos > 0 && self.inner.pos % spacing == 0 && self.checkpoints.last().map_or(true, |c| c.pos < self.inner.pos) {
+                let mut c = self.inner.clone();
+                c.raw = Vec::new();
+                c.kept = Vec::new();
+                self.checkpoints.push(c);
             }
             if let Some(s) = self.inner.process_next() {
                 steps.push(super::view::step_json(&self.inner, &s));

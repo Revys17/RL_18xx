@@ -111,7 +111,8 @@ pub struct SiteGame {
     pub manually_ended: bool,
     /// Each corporation's last run (`ports:last_run`) and the hexes it laid in its last operating turn
     pub last_runs: HashMap<String, RunRecord>,
-    pub laid_hexes: HashMap<String, (u32, u8, Vec<String>)>,
+    /// Each corporation's lays by operating turn (the latest few): Ruby's `OperatingInfo#laid_hexes`
+    pub laid_hexes: HashMap<String, Vec<(u32, u8, Vec<String>)>>,
     /// How far the log has been handed out (`take_log`)
     log_pos: usize,
     /// The log lines written before the first action (step 0's)
@@ -161,6 +162,10 @@ pub struct SiteGame {
     /// The players who were to act when a manual end finished the game (Ruby's round is left as it was: bot_view's
     /// `acting` of a finished game)
     pub acting_at_end: Option<Vec<u32>>,
+    /// Ruby's `train.owner` of every train a company has held: its holder now, the depot once discarded
+    /// (`route_check::DEPOT`), nobody once rusted (Ruby's `rust` sets it nil: `route_check::NOBODY`): what a last run's
+    /// route is rebuilt for (`train_owner(train)`)
+    pub train_owners: HashMap<String, Option<String>>,
 }
 
 impl Clone for SiteGame {
@@ -207,6 +212,7 @@ impl Clone for SiteGame {
             stock_history: self.stock_history.clone(),
             program_meta: self.program_meta.clone(),
             acting_at_end: self.acting_at_end.clone(),
+            train_owners: self.train_owners.clone(),
         }
     }
 }
@@ -334,6 +340,7 @@ impl SiteGame {
             stock_history: Default::default(),
             program_meta: BTreeMap::new(),
             acting_at_end: None,
+            train_owners: HashMap::new(),
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -500,6 +507,8 @@ impl SiteGame {
         let translated = if self.swapped.is_empty() { a.clone() } else { swap_city_refs(a, &self.swapped) };
         let action = action_from_json(&translated)?;
         let before = self.site_before(&action);
+        // the operating turn the action is made in (a company's last lay can end the round)
+        let tr_before = self.turn_round();
         let was_finished = self.game.finished;
         // the log's view of the position before (a copy without the map and the records)
         let log_before = self.site_log.then(|| super::log::before(self));
@@ -657,7 +666,7 @@ impl SiteGame {
             }
         });
         super::programs::observe(self, stock_turn_before, a, hist_player, won_minor, advanced, auction_before);
-        self.site_after(&t, a, &action, before, corp_ranks);
+        self.site_after(&t, a, &action, before, corp_ranks, tr_before);
         if let Some(b) = log_before {
             let mut lines = super::log::explain(self, &b, a);
             lines.extend(super::log::turn_start(self, &b));
@@ -726,6 +735,7 @@ impl SiteGame {
         action: &Action,
         before: Option<String>,
         corp_ranks: Option<HashMap<String, super::g1867::CorpRank>>,
+        tr_before: (u32, u8),
     ) {
         let (turn, round) = self.turn_round();
         for c in &self.game.corporations {
@@ -776,16 +786,41 @@ impl SiteGame {
                 }
             }
         }
+        // (a train no company holds any more rusted: Ruby's `rust` sets its owner to nil; a discarded one is the depot's)
+        let mut held: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for c in &self.game.corporations {
+            for t in &c.trains {
+                held.insert(t.id.as_str());
+                if self.train_owners.get(&t.id).and_then(|o| o.as_deref()) != Some(c.sym.as_str()) {
+                    self.train_owners.insert(t.id.clone(), Some(c.sym.clone()));
+                }
+            }
+        }
+        let discarded: std::collections::HashSet<&str> = self.game.depot.discarded.iter().map(|t| t.id.as_str()).collect();
+        for (id, owner) in self.train_owners.iter_mut() {
+            if !held.contains(id.as_str()) {
+                let now = if discarded.contains(id.as_str()) { super::route_check::DEPOT } else { super::route_check::NOBODY };
+                if owner.as_deref() != Some(now) {
+                    *owner = Some(now.to_string());
+                }
+            }
+        }
         match action {
             Action::LayTile { hex_id, tile_id, entity_id, .. } => {
                 self.supply.laid(tile_id, before.as_deref().unwrap_or(""));
                 self.swapped.retain(|h| h != hex_id);
                 let corp = self.operator_of(entity_id);
-                let e = self.laid_hexes.entry(corp).or_insert((turn, round, Vec::new()));
-                if (e.0, e.1) != (turn, round) {
-                    *e = (turn, round, Vec::new());
+                let (lt, lr) = tr_before;
+                let list = self.laid_hexes.entry(corp).or_default();
+                if list.last().is_none_or(|e| (e.0, e.1) != (lt, lr)) {
+                    list.push((lt, lr, Vec::new()));
+                    if list.len() > 4 {
+                        list.remove(0);
+                    }
                 }
-                e.2.push(hex_id.clone());
+                if let Some(e) = list.last_mut() {
+                    e.2.push(hex_id.clone());
+                }
             }
             Action::RunRoutes { entity_id, .. } => {
                 let routes = raw.get("routes").and_then(Value::as_array).cloned().unwrap_or_default();

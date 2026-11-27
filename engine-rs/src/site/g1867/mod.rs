@@ -9,6 +9,7 @@ pub mod generate;
 pub mod key;
 pub mod log;
 pub mod menu;
+pub mod order;
 pub mod view;
 
 use super::game::SiteGame;

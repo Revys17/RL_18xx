@@ -230,10 +230,18 @@ fn disjoint(a: &[PathRef], b: &[PathRef]) -> bool {
     !a.iter().any(|p| b.contains(p))
 }
 
+/// A train's owner once discarded (Ruby's Depot: no city is tokened by it) and once rusted (nil: Ruby's
+/// `City#tokened_by?(nil)` is true of a city with an empty slot, `nil&.corporation == nil`).
+pub const DEPOT: &str = "\u{0}depot";
+pub const NOBODY: &str = "\u{0}nil";
+
 /// A city with a station of `corp` (Ruby `city_tokened_by?`); towns and offboards have none.
 fn tokened_by(game: &BaseGame, n: &Node, corp: &str) -> bool {
     match &n.1 {
         E::City(i) => game.hexes[n.0].tile.cities.get(*i).is_some_and(|c| {
+            if corp == NOBODY {
+                return c.tokens.iter().any(|t| t.is_none());
+            }
             c.tokens.iter().flatten().any(|t| t.corporation_id == corp) || c.extra_tokens.iter().any(|t| t.corporation_id == corp)
         }),
         _ => false,
@@ -574,6 +582,35 @@ fn route_hexes(g: &SiteGame, r: &Value, b: &Built) -> Vec<String> {
         }
     }
     nodes.iter().map(|n| g.game.hexes[n.0].id.clone()).collect()
+}
+
+/// ports:last_run's routes as Opal's map rebuilds them on the board now (`Engine::Route.new(connection_hexes:, nodes:,
+/// routes: built)` per train, then `Route#hexes`): each route excludes the track of the ones before it; None for a
+/// route whose chains no longer fit the map (Ruby's `connection_data` comes back empty).
+pub fn rebuilt_hexes(g: &SiteGame, corp: &str, routes: &[Value]) -> Vec<Option<Vec<String>>> {
+    let mut before: Vec<PathRef> = Vec::new();
+    let mut out = Vec::new();
+    let _ = corp;
+    for r in routes {
+        // Route#corporation is the train's owner now (`train_owner(train)`): a train sold on is run for its new owner,
+        // a discarded one for the depot, a rusted one for nil
+        let train = r.get("train").and_then(Value::as_str).unwrap_or("");
+        // (a route of several chains is rebuilt whoever owns the train: find_pairwise_chain asks for no station)
+        let owner = g.train_owners.get(train).cloned().flatten().unwrap_or_else(|| DEPOT.to_string());
+        let built = build(g, &owner, r, &before).ok().filter(|b| !b.conns.is_empty());
+        match built {
+            Some(b) => {
+                before.extend(b.paths());
+                let mut bare = r.clone();
+                if let Some(m) = bare.as_object_mut() {
+                    m.remove("hexes");
+                }
+                out.push(Some(route_hexes(g, &bare, &b)));
+            }
+            None => out.push(None),
+        }
+    }
+    out
 }
 
 /// Ruby `revenue_str`: the stops' hexes in the order the train reaches them, each stop once (`visited_hexes`).
