@@ -292,6 +292,18 @@ pub struct TokenCities {
     pub map: std::collections::HashMap<String, Vec<Option<(String, usize)>>>,
 }
 
+/// A company's place in Ruby's `Corporation#<=>` (the operating order's sort; G1867::Step::Merge sorts the merging
+/// minors with it): the higher price, the column farther right, the higher row, then the earlier arrival on its share
+/// price's cell (`share_price.corporations.find_index`), the name last; a company with no price after every other.
+pub type CorpRank = (i32, i32, u8, usize, String);
+
+pub fn corp_rank(game: &BaseGame, c: &crate::entities::Corporation) -> CorpRank {
+    match c.share_price.as_ref() {
+        Some(sp) => (-sp.price, -(sp.column as i32), sp.row, game.market_cell_position(&c.sym, sp.row, sp.column), c.name.clone()),
+        None => (i32::MAX, 0, 0, 0, c.sym.clone()),
+    }
+}
+
 /// The companies occupying each city slot: (hex, city, slot) -> company.
 pub fn slot_owners(game: &BaseGame) -> std::collections::HashMap<(String, usize, usize), String> {
     let mut out = std::collections::HashMap::new();
@@ -308,57 +320,90 @@ pub fn slot_owners(game: &BaseGame) -> std::collections::HashMap<(String, usize,
 }
 
 impl TokenCities {
-    /// After an engine action: a station still where it was keeps its city; a station newly placed takes a slot of
-    /// its company newly occupied on its hex, several of them on one hex (a merger moving two minors' stations into
-    /// Montreal) by their previous holders in Corporation#<=> order on the prices before. (Ruby's order of two such
-    /// stations is not always this: docs/SITE_ENGINE_RS_1867.md §13, the known gaps.)
+    /// Ruby `move_tokens_to_surviving` (`used + unused`): the company's tokens in use first, in their order.
+    pub fn compact(&mut self, sym: &str) {
+        if let Some(list) = self.map.get_mut(sym) {
+            let n = list.len();
+            let mut used: Vec<Option<(String, usize)>> = list.drain(..).filter(Option::is_some).collect();
+            used.resize(n.max(used.len()), None);
+            *list = used;
+        }
+    }
+
+    /// After an engine action, per company, Ruby's tokens (the record's index is the token's place in Ruby's
+    /// `corporation.tokens`; a record is a token in use): a station still standing keeps its token, also where
+    /// engine-rs took another of the company's tokens on that hex off the map (it knows only the hex: Ruby's
+    /// ReduceTokens removes the token in the city named, `token.remove!`, and the others keep their places); the
+    /// stations newly placed (as many on a hex as the engine's tokens there beyond those kept) take Ruby's next tokens
+    /// (`next_token`: the first not in use), several at once (a merger moving minors' stations) by their previous
+    /// holders in Corporation#<=> order on the prices before (G1867::Step::Merge#move_tokens, `@merging.sort`).
     pub fn update(
         &mut self,
         before: &std::collections::HashMap<(String, usize, usize), String>,
-        rank_before: &dyn Fn(&str) -> (i32, i32, u8, String),
+        rank_before: &dyn Fn(&str) -> CorpRank,
         game: &BaseGame,
     ) {
         let after = slot_owners(game);
         for c in &game.corporations {
             let list = self.map.entry(c.sym.clone()).or_default();
-            list.resize(c.tokens.len(), None);
+            if list.len() < c.tokens.len() {
+                list.resize(c.tokens.len(), None);
+            }
+            let occupied = |h: &str, ci: usize| after.iter().any(|((hh, cc, _), o)| hh == h && *cc == ci && o == &c.sym);
+            // the stations still standing
             let mut taken: Vec<(String, usize)> = Vec::new();
-            let mut fresh: Vec<usize> = Vec::new();
-            for (ti, t) in c.tokens.iter().enumerate() {
-                if !t.used || t.city_hex_id.is_empty() {
-                    list[ti] = None;
-                    continue;
-                }
-                let still = list[ti].as_ref().is_some_and(|(h, ci)| {
-                    h == &t.city_hex_id && after.iter().any(|((hh, cc, _), o)| hh == h && cc == ci && o == &c.sym)
-                });
-                if still {
-                    taken.push(list[ti].clone().unwrap());
+            for rec in list.iter_mut() {
+                let keep = rec.as_ref().is_some_and(|(h, ci)| occupied(h, *ci) && !taken.iter().any(|(th, tc)| th == h && tc == ci));
+                if keep {
+                    taken.push(rec.clone().unwrap());
                 } else {
-                    list[ti] = None;
-                    fresh.push(ti);
+                    *rec = None;
                 }
             }
-            for ti in fresh {
-                let hex = c.tokens[ti].city_hex_id.clone();
-                // this company's slots on the hex, not yet anyone's of its tokens, the newly occupied first, then by
-                // the previous occupant's Ruby order
-                let mut cands: Vec<((u8, (i32, i32, u8, String)), usize)> = after
+            // the stations newly placed, hex by hex: as many as the engine's tokens there beyond those kept, each a
+            // slot of the company's on the hex no token of its has, the newly occupied first, then by the previous
+            // occupant's Ruby order
+            let mut hexes: Vec<String> = Vec::new();
+            for t in c.tokens.iter().filter(|t| t.used && !t.city_hex_id.is_empty()) {
+                if !hexes.contains(&t.city_hex_id) {
+                    hexes.push(t.city_hex_id.clone());
+                }
+            }
+            let mut placed: Vec<((u8, CorpRank, usize), String, usize)> = Vec::new();
+            for (hi, hex) in hexes.iter().enumerate() {
+                let used = c.tokens.iter().filter(|t| t.used && &t.city_hex_id == hex).count();
+                let kept = taken.iter().filter(|(h, _)| h == hex).count();
+                if used <= kept {
+                    continue;
+                }
+                let mut cands: Vec<((u8, CorpRank, usize), usize)> = after
                     .iter()
-                    .filter(|((h, _, _), o)| h == &hex && *o == &c.sym)
+                    .filter(|((h, _, _), o)| h == hex && *o == &c.sym)
                     .filter(|((h, ci, _), _)| !taken.iter().any(|(th, tc)| th == h && tc == ci))
                     .map(|((h, ci, si), _)| {
                         let prev = before.get(&(h.clone(), *ci, *si));
                         let new = prev.map_or(true, |p| p != &c.sym) as u8;
-                        let rank = prev.map_or((i32::MAX, 0, 0, String::new()), |p| rank_before(p));
-                        ((1 - new, rank), *ci)
+                        let rank = prev.map_or((i32::MAX, 0, 0, 0, String::new()), |p| rank_before(p));
+                        ((1 - new, rank, hi), *ci)
                     })
                     .collect();
                 cands.sort();
-                if let Some((_, ci)) = cands.first() {
-                    list[ti] = Some((hex.clone(), *ci));
-                    taken.push((hex, *ci));
-                }
+                cands.dedup_by(|a, b| a.1 == b.1);
+                placed.extend(cands.into_iter().take(used - kept).map(|(k, ci)| (k, hex.clone(), ci)));
+            }
+            // each takes Ruby's next token (`next_token`: the first not in use), in that order (a merger moves the
+            // merging minors' stations one minor at a time)
+            placed.sort();
+            let mut free = (0..list.len()).filter(|&ti| list[ti].is_none()).collect::<Vec<_>>().into_iter();
+            for (_, hex, ci) in placed {
+                let ti = match free.next() {
+                    Some(ti) => ti,
+                    None => {
+                        list.push(None);
+                        list.len() - 1
+                    }
+                };
+                list[ti] = Some((hex, ci));
             }
         }
     }

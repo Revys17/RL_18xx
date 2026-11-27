@@ -75,11 +75,13 @@ fn token_places(g: &SiteGame, sym: &str, tokens: &[crate::entities::Token]) -> V
     if g.game.title == "1867" {
         // the site layer's record of each station's city (Ruby's token.city)
         if let Some(list) = g.token_cities.map.get(sym) {
-            for (ti, t) in tokens.iter().enumerate().filter(|(_, t)| t.used) {
-                match list.get(ti).cloned().flatten() {
-                    Some((h, c)) => out.push(format!("{h}-{c}")),
-                    None => out.push(format!("{}-?", t.city_hex_id)),
-                }
+            // Ruby's tokens in its order (the record's), then any of the engine's the record doesn't account for
+            out.extend(list.iter().flatten().map(|(h, c)| format!("{h}-{c}")));
+            let used: Vec<&crate::entities::Token> = tokens.iter().filter(|t| t.used).collect();
+            if used.len() > out.len() {
+                let missing = used.len() - out.len();
+                let unrecorded = tokens.iter().enumerate().filter(|(ti, t)| t.used && list.get(*ti).cloned().flatten().is_none());
+                out.extend(unrecorded.take(missing).map(|(_, t)| format!("{}-?", t.city_hex_id)));
             }
             return out;
         }

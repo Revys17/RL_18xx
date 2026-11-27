@@ -504,15 +504,8 @@ impl SiteGame {
             _ => None,
         };
         let slots_before = if is_1867 { super::g1867::slot_owners(&self.game) } else { HashMap::new() };
-        let ranks_before: HashMap<String, (i32, i32, u8, String)> = if is_1867 {
-            self.game
-                .corporations
-                .iter()
-                .map(|c| {
-                    let k = c.share_price.as_ref().map_or((i32::MAX, 0, 0, c.sym.clone()), |sp| (-sp.price, -(sp.column as i32), sp.row, c.name.clone()));
-                    (c.sym.clone(), k)
-                })
-                .collect()
+        let ranks_before: HashMap<String, super::g1867::CorpRank> = if is_1867 {
+            self.game.corporations.iter().map(|c| (c.sym.clone(), super::g1867::corp_rank(&self.game, c))).collect()
         } else {
             HashMap::new()
         };
@@ -537,10 +530,8 @@ impl SiteGame {
             self.game
                 .corporations
                 .iter()
-                .filter_map(|c| {
-                    let sp = c.share_price.as_ref()?;
-                    Some((crate::entities::EntityId::corporation(&c.sym).0, (-sp.price, -(sp.column as i32), sp.row, c.name.clone())))
-                })
+                .filter(|c| c.share_price.is_some())
+                .map(|c| (crate::entities::EntityId::corporation(&c.sym).0, super::g1867::corp_rank(&self.game, c)))
                 .collect::<HashMap<_, _>>()
         });
         self.game.process_action_internal(&action)?;
@@ -548,8 +539,16 @@ impl SiteGame {
         if is_1867 {
             self.records_1867(&translated, &action, or_before, &parred_before);
             self.merger.update(merge_state_before, &action, &self.game.round);
-            let rank = |sym: &str| ranks_before.get(sym).cloned().unwrap_or((i32::MAX, 0, 0, sym.to_string()));
+            let rank = |sym: &str| ranks_before.get(sym).cloned().unwrap_or((i32::MAX, 0, 0, 0, sym.to_string()));
             self.token_cities.update(&slots_before, &rank, &self.game);
+            // the last station a merged major takes off (Ruby ReduceTokens#move_tokens_to_surviving): its tokens in use
+            // first, in their order, the others after them
+            if let Action::RemoveToken { entity_id, .. } = &action {
+                let removing = matches!(&self.game.round, crate::rounds::Round::Merger(s) if s.corporations_removing_tokens.as_ref().is_some_and(|l| l.contains(entity_id)));
+                if !removing {
+                    self.token_cities.compact(entity_id);
+                }
+            }
             if let crate::rounds::Round::Operating(s) = &self.game.round {
                 self.interest = s.interest_snapshot.clone();
             } else if let Some(c) = loan_ops_ahead {
@@ -665,7 +664,7 @@ impl SiteGame {
         raw: &Value,
         action: &Action,
         before: Option<String>,
-        corp_ranks: Option<HashMap<String, (i32, i32, u8, String)>>,
+        corp_ranks: Option<HashMap<String, super::g1867::CorpRank>>,
     ) {
         let (turn, round) = self.turn_round();
         for c in &self.game.corporations {
@@ -685,7 +684,7 @@ impl SiteGame {
         }
         // the companies that changed hands, in the order Ruby moves them: one at a time but for 1867's mergers, where
         // Merge#move_assets takes each merging minor's companies in turn, the minors in Corporation#<=> order
-        let mut moved: Vec<(Option<(i32, i32, u8, String)>, u64, usize)> = Vec::new();
+        let mut moved: Vec<(Option<super::g1867::CorpRank>, u64, usize)> = Vec::new();
         for (i, c) in self.game.companies.iter().enumerate() {
             let owner = c.owner.0.clone();
             if self.company_owner.get(&c.sym) != Some(&owner) {
