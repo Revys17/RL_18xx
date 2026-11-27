@@ -450,6 +450,11 @@ corpus. If one occurs live, the shadow reports it (`differs` or `refused`, once 
   shadow's `last_action` would differ there.
 - Ruby's stale `@crowded_corps` memo letting a closed minor record a discard after the first 8 (one old 18xx.games
   game).
+- **Ruby's stale graph cache** (§13.1): Ruby skips a station step the rules allow (Token's `can_really_place_token?`
+  read on an old graph); a Rust page there offers moves the site refuses, and the client then re-opens the game on
+  Opal (§13.2 #2).
+- **A depot train for a company at its limit** (phase 8): Ruby takes it and asks for a discard; engine-rs (the
+  rulebook) doesn't, and since §13.2 #1 neither does the Rust hand. Caleb's call.
 
 ---
 
@@ -820,14 +825,48 @@ sees a stored action with an extra pass and re-reads the game (the shadow report
 
 **Known gaps** (Rust's, listed for B and C):
 - Key: a company with two stations in one multi-city hex (Montreal, Toronto) sometimes lists them in the other order
-  (`corps.*.tokens`: 1 production position, 505 generated positions in 7 games); a crowded company first in
-  DiscardTrain (1 generated position).
+  (`corps.*.tokens`: 1 production position, 505 generated positions in 7 games; **fixed, §13.2 #7**); a crowded
+  company first in DiscardTrain (1 generated position).
 - Menus vs Opal: 1867's parts are facts (C words them); Opal's par offers for minors in phase 4+ (Ruby starts minors
   by bid: the generator offers none); an over-the-limit train from the president's other company (34 positions); one
   hex where the generator refuses lays Opal's hand lists (26 options, prod 26@186: to be judged by Ruby in B's
   verdicts).
 - Log: multi-minor merger results (shares dealt, closes, "merges into ... receiving", the token count), ReduceTokens'
-  "removes token from", an export on a phase change, nationalized minors' closes in some orders; the old fixtures'
-  runs without revenue.
+  "removes token from", an export on a phase change, nationalized minors' closes in some orders (**fixed, §13.2
+  #8**); the old fixtures' runs without revenue.
 - restartInfo: one hotseat fixture whose action ids skip; 1830 game 22 (27 positions, a new comparison, unchanged code).
 - Programs' auto actions stay the server's (as step 1).
+
+### 13.2 The verification's findings, fixed (2026-11-27)
+
+The verification stage (menu-driven random walks on the wasm package, every option judged by the site's Ruby, Rust
+against Opal on the site's games and the dev game 1268, the shadow on :9301) left eight findings. What each became
+(A's commits on `site/engine-rs-1867` after a316902, **all in `src/site`**: no new edit outside it, no `site_rules`
+branch, §5.3 unchanged; B's and C's on their branches, §8, §9):
+
+| # | Finding | What was done |
+|---|---|---|
+| 1 | Phase 8: the menu offered depot trains to a company at its train limit; act's check (the generator's room check) refused them, Ruby accepts them and asks for a discard | **3fdd015**: the menu offers what the check accepts: no depot train while the company is at its limit (only trade-ins); another company's train already followed the generator. Which rule the site wants is **Caleb's call** (the rulebook's: no train beyond the limit, engine-rs's and now the Rust hand's; or Ruby's: buy, then discard — that would be a `site_rules` branch in `g67_gen_buy_train`, for the training session's review). Opal pages still offer them (Ruby accepts them there). A test walks both 1867 fixtures: every enabled train card and affordable trade-in of every acting player's menu is a move `check_move` accepts. |
+| 2 | Ruby's stale graph cache skips a station step the rules allow; a Rust page then offers moves the server refuses, with no way back but a manual switch | Not emulated in engine-rs. **C** (living-board `rust-1867`): a move the site refuses at the position the page made it (no move of the site's game at or after its id) re-opens the game on the site's engine (Opal, whose hand is Ruby's) and is reported (`refused`, then `fallback`); a refusal after someone else's move reads the game again and stays on Rust; 401/403 stay on Rust. `test/rust/refused.cjs` (3 / 3). Ruby's defect itself is Caleb's (§5.4). |
+| 3 | Ruby's stale operator after a MajorTrainless nationalization with majors queued: every later move refused, on either engine (11 of 61 walks) | Pre-existing, the site's Ruby (§5.4); not changed (the agreement: no change to `lib/engine`); **Caleb's call**. Where it is (walk-105-4p at 1225-1227): the round's operator at index 0 is the major nationalized first (ICR), `reset_corporation` leaves the round holding the old object, and nothing re-checks it once MajorTrainless's queue is empty: G1867's `skip_entity?` would skip it (`!@game.corporations.include?(entity)`), but `MajorTrainless#process_choose` removes the major from the queue before `nationalize!`, so `nationalize!`'s `force_next_entity! if @round.current_entity == corporation` sees the next queued major instead and never fires; the round then gives Track to the stale ICR and refuses the next move. (Simply swapping the two lines is not the fix: tried in a throwaway container, it stops the same walk earlier, at 1115.) |
+| 4 | Dense maps: single moves up to ~1 s natively (20-30 s to open such a game in wasm; the shadow's 10 s) | Not changed: the time is the shared engine's corporation graph (`map.rs` `compute_corp_graph` → `walk_from_node`, exponential where paths converge, as Ruby's walk), outside `src/site`. Profile of gen-2053 (6.8 s): all of it in 304 graph computations, 12 moves of 400-970 ms, each recomputing NYC's or NTR's graph (~400-500 ms each) after a lay, called by `step_actions` → `track_has_layable_tile` → `lay_tile_candidate_hexes` (the Track step's skip check) and `can_run_route` (the Route skip). **For the training session**: an exact memo or pruning of the converging walk, or a cheaper Track-skip check; real games stay fast (≤ 86 ms). |
+| 5 | A 5+5E traded for a 2+2 listed at -$150 and enabled, on both hands | **3fdd015** (A's menu: no trade-in at $0 or less, as the generator) and **C** (`moves.ts`: the same filter on Opal's `discountable_trains_for`). |
+| 6 | After an operating round ended by a company's repayments, the snapshot's interest was the round's start count (1268 at 226-232: CA $10, Ruby $5) | **5c30e29**: the company whose LoanOperations ran inside the move that ended the round keeps the loans it holds once repaid (Ruby's `calculate_corporation_interest`). 1268: snapshots 766 / 766. |
+| 7 | Two stations in one multi-city hex sometimes keyed in the other order | **e5d2487**: the merging minors ranked by Ruby's `Corporation#<=>` (the cell-arrival tie-break, `market_cell_position`), a station still standing keeps its token whichever token engine-rs marks unused on that hex, the major's tokens compacted when ReduceTokens ends, a new station takes Ruby's next token. Generated games' keys = Ruby's at **361,809 / 361,813** positions (was 361,305; the 4 left: Ruby's own stops, §5.4); corpus keys unchanged. |
+| 8 | Log: ~2% of Opal's lines missing, extra lines Rust pages show | **ac4f182** and **9ac8c34** (each commit's message lists the line families). Against Opal goldens: :9301's ten games and 1268 **3,443 / 3,443 steps, 8,747 / 8,747 lines**; the production site's twelve 1867 games (a fresh read-only export, deleted after) **16,405 / 16,405 lines**, 6,688 / 6,690 steps (the 2: the order of two players a minor's bid knocks out); the fixtures 7,118 / 7,183 lines, every step still differing in the one old fixture whose runs carry no revenue. Before: on the first set 87.09% of steps, 97.32% of lines, 1,854 lines Rust wrote that Opal's step doesn't. |
+
+**Checks at 9ac8c34** (package `$RUST2/pkg/9ac8c34…`): 1830's spike goldens and live set unchanged (snapshots 82,083 /
+82,083, menus 322,145 / 322,150, log lines 171,590 / 171,590; live 3,908 / 3,908 everywhere); keys (`site_engine keys`
+against the reference Ruby keys): :9301 1867 2,677 / 2,677, fixtures 3,012 / 3,033 (the 21 old runs), production 1867
+6,690 / 6,690 (game 33 included), 1830 147,037 / 147,037 and 4,759 / 4,759, generated 361,809 / 361,813; snapshots
+against Opal: :9301 and 1268 3,443 / 3,443, production 6,690 / 6,690; the menu-driven walks re-run on the package (61
+games, 83,838 moves, all to the end): no enabled option act refuses but the walk tool's own dutch-lot price (was 93:
+73 depot trains at the limit, 20 trade-ins at -$150); a test (`g1867_menus_train_cards_are_moves_act_accepts`) walks
+both 1867 fixtures' menus against `check_move`.
+
+**Gate** at 9ac8c34 (§10.6; under `taskset -c 24-31,56-63 nice -n 19`, `CUDA_VISIBLE_DEVICES=`): `cargo test
+--release --no-default-features --features python` 270 passed, 0 failed, 11 ignored, and `--features site` 296 passed,
+0 failed, 10 ignored (both neutrality pins unchanged under both: 1830's 60 walks, 1867's 24); `cargo check --target
+wasm32-unknown-unknown --features wasm,site-titles` and `--features wasm` clean; default `cargo check` clean; the full
+`pytest tests/` in this worktree's venv: 1,822 passed, 7 skipped, 0 failed (22 min; the Python build compiles none of the modules these commits
+change: all are behind `site`). No Python-vs-Rust parity test failed.
