@@ -72,12 +72,13 @@ gz() { if command -v gzip >/dev/null 2>&1; then gzip -9c "$1" | wc -c | tr -d ' 
 br() { if command -v brotli >/dev/null 2>&1; then brotli -q 11 -c "$1" | wc -c | tr -d ' '; else echo null; fi; }
 API=$("$OUT/bin/site_engine" version | sed -n 's/.*"api":\([0-9]*\).*/\1/p')
 KEY=$("$OUT/bin/site_engine" version | sed -n 's/.*"key":\([0-9]*\).*/\1/p')
+TITLES=$("$OUT/bin/site_engine" version | sed -n 's/.*"titles":\(\[[^]]*\]\).*/\1/p')
 cat > "$OUT/pkg/BUILD.json" <<JSON
 {"engine": "engine-rs",
  "commit": "$ENGINE_RS_COMMIT",
  "api": $API,
  "key": $KEY,
- "titles": ["1830"],
+ "titles": $TITLES,
  "features": {"pkg": ["site", "wasm", "site-titles"], "site_engine": ["site"]},
  "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
  "wasm_bindgen": "$have",
