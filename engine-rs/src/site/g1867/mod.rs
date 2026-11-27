@@ -204,9 +204,13 @@ fn ruby_order(kind: StepKind, mut types: Vec<String>) -> Vec<String> {
     types
 }
 
-/// The round's entity now (the snapshot's `current`, "p:<id>" / "c:<sym>" / "m:<sym>").
+/// The round's entity now (the snapshot's `current`, "p:<id>" / "c:<sym>" / "m:<sym>": Ruby `current_entity`, the
+/// active step's: HomeToken's is the company whose station is pending, where its `active_entities` is the round's).
 pub fn current_holder(game: &mut BaseGame) -> Option<String> {
-    let (_, e) = active_step(game)?;
+    let snap = game.round.clone();
+    let (i, raw) = game.blocking_step_entity(&snap)?;
+    let kind = game.round_step_descs(&snap).get(i)?.kind;
+    let e = if kind == StepKind::HomeToken { raw } else { active_step(game)?.1 };
     Some(match e {
         StepEntity::Player(p) => format!("p:{p}"),
         StepEntity::Corp(s) => format!("c:{s}"),

@@ -13,6 +13,10 @@ use std::collections::BTreeMap;
 /// Ruby's name for a preprinted hex's tile: a hex whose code is one of the generic tiles' codes takes that tile's
 /// name ("blank", "town", "city"); any other is named by its coordinate.
 pub fn preprinted_name(game: &crate::game::BaseGame, hex: &str) -> String {
+    // 1867's map names every preprinted tile by its coordinate
+    if game.title == "1867" {
+        return hex.to_string();
+    }
     let title = game.title_def();
     if title.preprinted_hex_dsl(hex).is_some() {
         return hex.to_string();
@@ -153,6 +157,9 @@ pub fn player_order(g: &SiteGame) -> Vec<u32> {
 }
 
 pub fn snapshot(g: &SiteGame, action_id: i64) -> Value {
+    if g.game.title == "1867" {
+        return super::g1867::view::snapshot(g, action_id);
+    }
     let game = &g.game;
     let results = game.calculate_results();
     let order = player_order(g);
@@ -396,9 +403,9 @@ pub fn ending(g: &SiteGame) -> Value {
             (format!("OR {turn}.{n}"), format!("after OR {turn}.{n}"))
         }
         (_, T::OneMoreFullOrSet) => {
-            // `@final_turn`.`final_operating_rounds` (the phase's count)
+            // `@final_turn`.`final_operating_rounds` (the phase's count; 1867's game_end_set_final_turn! sets 3)
             let ft = game.final_turn.unwrap_or(turn + 1);
-            let n = game.phase.operating_rounds;
+            let n = title.game_end_final_ors().unwrap_or(game.phase.operating_rounds);
             (format!("OR {ft}.{n}"), format!("after OR {ft}.{n}"))
         }
     };
@@ -686,6 +693,9 @@ pub fn action_lite(g: &SiteGame, raw: &Value) -> Value {
 /// The engine part of StaticInfo (types.ts): what depends on the players, the optional rules or the title's rules
 /// data. Names, colours, logos, descriptions, hex geometry and texts come from the title pack.
 pub fn static_info(g: &SiteGame) -> Value {
+    if g.game.title == "1867" {
+        return super::g1867::view::static_info(g);
+    }
     let game = &g.game;
     let title = game.title_def();
     let players: Vec<Value> = g

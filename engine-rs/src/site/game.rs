@@ -145,6 +145,9 @@ pub struct SiteGame {
     turn_advanced: bool,
     /// 1867's merger round state the engine doesn't keep (Ruby's `converts`, `merge_type`)
     pub merger: super::g1867::MergerRecord,
+    /// 1867: the loans each company owed interest on in the last operating round (Ruby's `@interest`, which outlives
+    /// the round; the engine keeps it in the round's state)
+    pub interest: HashMap<String, u32>,
 }
 
 impl Clone for SiteGame {
@@ -185,6 +188,7 @@ impl Clone for SiteGame {
             engine_count: self.engine_count,
             turn_advanced: self.turn_advanced,
             merger: self.merger.clone(),
+            interest: self.interest.clone(),
         }
     }
 }
@@ -306,6 +310,7 @@ impl SiteGame {
             engine_count: 0,
             turn_advanced: false,
             merger: Default::default(),
+            interest: HashMap::new(),
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -482,11 +487,26 @@ impl SiteGame {
             Vec::new()
         };
         let merger_before = matches!(self.game.round, crate::rounds::Round::Merger(_));
+        // the companies' owners' order before a 1867 merger (Ruby `Corporation#<=>`: price, column, row, name), keyed
+        // by the owner's entity id
+        let corp_ranks = (is_1867 && matches!(action, Action::Merge { .. })).then(|| {
+            self.game
+                .corporations
+                .iter()
+                .filter_map(|c| {
+                    let sp = c.share_price.as_ref()?;
+                    Some((crate::entities::EntityId::corporation(&c.sym).0, (-sp.price, -(sp.column as i32), sp.row, c.name.clone())))
+                })
+                .collect::<HashMap<_, _>>()
+        });
         self.game.process_action_internal(&action)?;
         self.engine_count += 1;
         if is_1867 {
             self.records_1867(&translated, &action, or_before, &parred_before);
             self.merger.update(merger_before, &self.game.round);
+            if let crate::rounds::Round::Operating(s) = &self.game.round {
+                self.interest = s.interest_snapshot.clone();
+            }
         }
         self.check_programs(rounds_before, was_finished);
         // the turn in progress (Ruby's round.current_actions), move by move, auto actions included: Ruby advances the
@@ -505,7 +525,7 @@ impl SiteGame {
             self.turn_actions.push(a.clone());
             self.turn_steps.push(step_before);
         }
-        self.site_after(&t, a, &action, before);
+        self.site_after(&t, a, &action, before, corp_ranks);
         if let Some(b) = log_before {
             let mut lines = super::log::explain(self, &b, a);
             lines.extend(super::log::turn_start(self, &b));
@@ -564,7 +584,14 @@ impl SiteGame {
         }
     }
 
-    fn site_after(&mut self, _t: &str, raw: &Value, action: &Action, before: Option<String>) {
+    fn site_after(
+        &mut self,
+        _t: &str,
+        raw: &Value,
+        action: &Action,
+        before: Option<String>,
+        corp_ranks: Option<HashMap<String, (i32, i32, u8, String)>>,
+    ) {
         let (turn, round) = self.turn_round();
         for c in &self.game.corporations {
             let list = self.holders.entry(c.sym.clone()).or_default();
@@ -581,13 +608,25 @@ impl SiteGame {
                 }
             }
         }
-        for c in &self.game.companies {
+        // the companies that changed hands, in the order Ruby moves them: one at a time but for 1867's mergers, where
+        // Merge#move_assets takes each merging minor's companies in turn, the minors in Corporation#<=> order
+        let mut moved: Vec<(Option<(i32, i32, u8, String)>, u64, usize)> = Vec::new();
+        for (i, c) in self.game.companies.iter().enumerate() {
             let owner = c.owner.0.clone();
             if self.company_owner.get(&c.sym) != Some(&owner) {
-                self.seq += 1;
-                self.company_seq.insert(c.sym.clone(), self.seq);
-                self.company_owner.insert(c.sym.clone(), owner);
+                let prev_owner = self.company_owner.get(&c.sym).cloned().unwrap_or_default();
+                let rank = corp_ranks.as_ref().and_then(|r| r.get(&prev_owner).cloned());
+                // (within a merging minor, its own list's order; elsewhere the companies' order, as step 1)
+                let within = if rank.is_some() { self.company_seq.get(&c.sym).copied().unwrap_or(0) } else { 0 };
+                moved.push((rank, within, i));
             }
+        }
+        moved.sort();
+        for (_, _, i) in moved {
+            let c = &self.game.companies[i];
+            self.seq += 1;
+            self.company_seq.insert(c.sym.clone(), self.seq);
+            self.company_owner.insert(c.sym.clone(), c.owner.0.clone());
         }
         if let crate::rounds::Round::Stock(_) = &self.game.round {
             if self.sold_turn != self.game.turn {
@@ -815,6 +854,9 @@ impl SiteGame {
     /// auto actions this move sets off (docs/SITE_ENGINE_RS.md §7.1): the worker uses `check`, posts, and appends
     /// the stored action instead.
     pub fn act(&mut self, a: &Value) -> Result<(Value, Option<StepOut>), String> {
+        if self.game.title == "1867" {
+            return super::g1867::act::act(self, a);
+        }
         let mut posted = a.clone();
         let obj = posted.as_object_mut().ok_or_else(|| refused("an action must be an object"))?;
         for k in ["id", "user", "created_at", "auto_actions"] {
@@ -855,6 +897,19 @@ impl SiteGame {
             out["routes"][k]["revenue"] = json!(rev);
         }
         Ok(out)
+    }
+
+    /// 1867: the loans a company owes interest on (Ruby `loans_due_interest`: the operating round's count, which
+    /// outlives the round; a company started afresh owes none).
+    pub fn interest_due(&self, sym: &str) -> u32 {
+        let reset = self.game.corp_idx.get(sym).is_some_and(|&ci| self.game.corporations[ci].ipo_price.is_none());
+        if reset {
+            return 0;
+        }
+        match &self.game.round {
+            crate::rounds::Round::Operating(s) => s.interest_snapshot.get(sym).copied().unwrap_or(0),
+            _ => self.interest.get(sym).copied().unwrap_or(0),
+        }
     }
 
     /// Whether the turn in progress has an action of this type processed at this engine step.

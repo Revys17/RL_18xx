@@ -46,6 +46,8 @@ fn main() {
     let mut acts_tiles = 5usize;
     let mut verbose = false;
     let mut only_title: Option<String> = None;
+    let mut dump: Option<i64> = None;
+    let mut act_check = false;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -72,6 +74,11 @@ fn main() {
                 i += 1;
             }
             "--verbose" => verbose = true,
+            "--act-check" => act_check = true,
+            "--dump" => {
+                dump = argv.get(i + 1).and_then(|x| x.parse::<i64>().ok());
+                i += 1;
+            }
             "--title" => {
                 only_title = argv.get(i + 1).cloned();
                 i += 1;
@@ -213,6 +220,26 @@ fn main() {
                 continue;
             }
         };
+        if act_check {
+            // 1867 (docs/SITE_ENGINE_RS_1867.md §3.2-§3.3): every recorded move the generator must accept on the position
+            // before it, and Ruby's recorded step auto actions after it = the predicted ones (games without programs)
+            let r = engine_rs::site::g1867::act::corpus_check(&mut g);
+            println!("{}", json!({"game": gid, "file": path.display().to_string(), "check": r}));
+            continue;
+        }
+        if let Some(at) = dump {
+            // debugging: the position after action `at` (0: the start) as the board and the hands see it
+            g.run_to(Some(at));
+            let pids: Vec<u32> = g.players.iter().map(|p| p.0).collect();
+            let mut menus = serde_json::Map::new();
+            for pid in pids {
+                menus.insert(pid.to_string(), engine_rs::site::menu::menu(&mut g, pid));
+            }
+            let snap = engine_rs::site::view::snapshot(&g, g.current_action_id);
+            let key = engine_rs::site::shadow::key_now(&mut g);
+            println!("{}", json!({"snap": snap, "menus": menus, "key": key, "info": engine_rs::site::view::static_info(&g)}));
+            continue;
+        }
         let golden = goldens.as_ref().and_then(|d| {
             engine_rs::site::compare::load_golden(d, &alt_gid).or_else(|| engine_rs::site::compare::load_golden(d, &gid))
         });
