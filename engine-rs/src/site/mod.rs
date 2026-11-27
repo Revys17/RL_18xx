@@ -30,14 +30,23 @@ pub mod compare;
 pub mod acts;
 #[cfg(feature = "site")]
 pub mod g1867;
+#[cfg(feature = "site")]
+pub mod authority;
+#[cfg(feature = "site")]
+pub mod check1830;
+#[cfg(feature = "site")]
+pub mod route_check;
+#[cfg(feature = "site")]
+pub mod programs;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
 /// The titles the site layer plays (docs/SITE_ENGINE_RS_1867.md §3.1): what `version()` lists.
 pub const TITLES: &[&str] = &["1830", "1867"];
 
-/// The engine's build: what `WasmGame.version()` and `site_engine version` print (docs/SITE_ENGINE_RS.md §3.2).
-pub const API_VERSION: u32 = 2;
+/// The engine's build: what `WasmGame.version()` and `site_engine version` print (docs/SITE_ENGINE_RS.md §3.2; API 3:
+/// docs/SITE_ENGINE_RS_STEP3.md §10, K1').
+pub const API_VERSION: u32 = 3;
 /// The shadow key's version (docs/SITE_ENGINE_RS.md §5.3; v2: docs/SITE_ENGINE_RS_1867.md §6).
 pub const KEY_VERSION: u32 = 2;
 /// The commit the engine was built from (site/build-site.sh sets ENGINE_RS_COMMIT; "dev" otherwise).
@@ -62,3 +71,5 @@ pub fn debug_upgradeable(g: &game::SiteGame, hex: &str) -> (Vec<(String, u8)>, V
 
 #[cfg(all(test, feature = "site"))]
 mod tests;
+#[cfg(all(test, feature = "site"))]
+mod tests_authority;

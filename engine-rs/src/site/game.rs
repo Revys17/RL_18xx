@@ -6,7 +6,7 @@
 use super::json::{action_from_json, swap_city_refs, tile_name, TileSupply, SWAPPED_PREPRINTED_CITIES};
 use crate::actions::{Action, GameError};
 use crate::game::BaseGame;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
 /// Error codes the worker maps to its messages (§3.2).
@@ -153,6 +153,14 @@ pub struct SiteGame {
     /// 1867's trains exported so far, (id, name): Ruby's depot keeps them (they rust with their type, "The Depot"
     /// in the rust event); engine-rs drops them
     pub exported: Vec<(String, String)>,
+    /// Ruby's `@round.players_history` of the stock round in progress (the Programmer's shenanigan checks,
+    /// docs/SITE_ENGINE_RS_STEP3.md §5.3)
+    pub stock_history: super::programs::StockHistory,
+    /// Each player's program's (id, created_at): what Ruby's `action < program` compares
+    pub program_meta: BTreeMap<u32, (Option<i64>, i64)>,
+    /// The players who were to act when a manual end finished the game (Ruby's round is left as it was: bot_view's
+    /// `acting` of a finished game)
+    pub acting_at_end: Option<Vec<u32>>,
 }
 
 impl Clone for SiteGame {
@@ -196,6 +204,9 @@ impl Clone for SiteGame {
             interest: self.interest.clone(),
             token_cities: self.token_cities.clone(),
             exported: self.exported.clone(),
+            stock_history: self.stock_history.clone(),
+            program_meta: self.program_meta.clone(),
+            acting_at_end: self.acting_at_end.clone(),
         }
     }
 }
@@ -320,6 +331,9 @@ impl SiteGame {
             interest: HashMap::new(),
             token_cities: Default::default(),
             exported: Vec::new(),
+            stock_history: Default::default(),
+            program_meta: BTreeMap::new(),
+            acting_at_end: None,
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -436,6 +450,7 @@ impl SiteGame {
             }
             let who = self.entity_name(a);
             self.log_push(format!("Game ended manually by {who}"));
+            self.acting_at_end = Some(super::authority::ruby_active_players(self));
             self.manually_ended = true;
             self.game.end_game();
             self.log_game_over();
@@ -457,15 +472,21 @@ impl SiteGame {
     fn apply_autos(&mut self, a: &Value) -> Result<(), String> {
         if let Some(Value::Array(autos)) = a.get("auto_actions") {
             for au in autos.clone() {
-                let t = atype(&au).to_string();
-                if t.starts_with("program_") {
-                    self.note_program(&au);
-                } else {
-                    self.apply_engine(&au).map_err(|e| format!("auto action {t}: {}", e.message))?;
-                }
+                self.apply_auto(&au)?;
             }
         }
         Ok(())
+    }
+
+    /// One auto action: a program's note, or an engine action.
+    pub fn apply_auto(&mut self, au: &Value) -> Result<(), String> {
+        let t = atype(au).to_string();
+        if t.starts_with("program_") {
+            self.note_program(au);
+            Ok(())
+        } else {
+            self.apply_engine(au).map_err(|e| format!("auto action {t}: {}", e.message))
+        }
     }
 
     fn entity_name(&self, a: &Value) -> String {
@@ -541,6 +562,15 @@ impl SiteGame {
                 .map(|c| (crate::entities::EntityId::corporation(&c.sym).0, super::g1867::corp_rank(&self.game, c)))
                 .collect::<HashMap<_, _>>()
         });
+        // the Programmer's history (Ruby's players_history): the stock turn before, whose move it is, 1867's minors
+        let stock_turn_before = super::programs::stock_turn(self);
+        let hist_player = super::authority::entity_player(self, a).flatten();
+        let auction_before = matches!(&self.game.round, crate::rounds::Round::Stock(s) if s.bid_auction.is_some());
+        let unparred_minors: Vec<String> = if is_1867 && stock_turn_before.is_some() {
+            self.game.corporations.iter().filter(|c| c.corp_type == crate::title::CorpType::Minor && c.ipo_price.is_none()).map(|c| c.sym.clone()).collect()
+        } else {
+            Vec::new()
+        };
         self.game.process_action_internal(&action)?;
         self.engine_count += 1;
         if is_1867 {
@@ -608,7 +638,8 @@ impl SiteGame {
             || (merger_before
                 && converted_before.is_none()
                 && matches!(&self.game.round, crate::rounds::Round::Merger(s) if s.converted.is_some() && !s.merge_type_convert));
-        if key_changed || stock_new || stock_1867 {
+        let advanced = key_changed || stock_new || stock_1867;
+        if advanced {
             self.turn_advanced = true;
             self.turn_actions.clear();
             self.turn_steps.clear();
@@ -616,6 +647,16 @@ impl SiteGame {
             self.turn_actions.push(a.clone());
             self.turn_steps.push(step_before);
         }
+        let won_minor = unparred_minors.iter().find_map(|sym| {
+            let &ci = self.game.corp_idx.get(sym.as_str())?;
+            let c = &self.game.corporations[ci];
+            if c.ipo_price.is_some() {
+                c.owner_id.player_id().map(|p| (p, sym.clone()))
+            } else {
+                None
+            }
+        });
+        super::programs::observe(self, stock_turn_before, a, hist_player, won_minor, advanced, auction_before);
         self.site_after(&t, a, &action, before, corp_ranks);
         if let Some(b) = log_before {
             let mut lines = super::log::explain(self, &b, a);
@@ -791,6 +832,12 @@ impl SiteGame {
             None => return,
         };
         let t = atype(a).to_string();
+        if t == "program_disable" {
+            self.program_meta.remove(&pid);
+        } else {
+            let created = a.get("created_at").and_then(Value::as_i64).unwrap_or(0);
+            self.program_meta.insert(pid, (a.get("id").and_then(Value::as_i64), created));
+        }
         let list = self.programs.entry(pid).or_default();
         list.pop();
         if t != "program_disable" {
@@ -949,54 +996,25 @@ impl SiteGame {
         Ok(step)
     }
 
-    /// A move of this player's, as the page would post it: processed; returns the posted site action (id = the
-    /// current id + 1, no auto actions) and its step. In a game where a player has a program the server adds the
-    /// auto actions this move sets off (docs/SITE_ENGINE_RS.md §7.1): the worker uses `check`, posts, and appends
-    /// the stored action instead.
+    /// A move as the page posts it (WasmGame API 3, docs/SITE_ENGINE_RS_STEP3.md §10): checked as the server's
+    /// authority checks it (1830: the site menu or Ruby's cross-player set; 1867: the generator; a run: the route
+    /// check, any valid run, priced by the engine), then processed with Ruby's auto actions (the Programmer, 1867's
+    /// step passes) made here. Returns the action as the server will store it (id = the current id + 1, Rust's
+    /// `auto_actions`) and its step. Chat, `log`, `end_game` and programs as the site stores them.
     pub fn act(&mut self, a: &Value) -> Result<(Value, Option<StepOut>), String> {
-        if self.game.title == "1867" {
-            return super::g1867::act::act(self, a);
+        let t = atype(a);
+        if t == "undo" || t == "redo" {
+            return Err("resync: an undo or redo re-opens the game".into());
         }
-        let mut posted = a.clone();
-        let obj = posted.as_object_mut().ok_or_else(|| refused("an action must be an object"))?;
-        for k in ["id", "user", "created_at", "auto_actions"] {
-            obj.remove(k);
+        if !self.done() {
+            return Err("resync: the replay hasn't finished".into());
         }
-        obj.retain(|_, v| !v.is_null());
-        if atype(&posted) == "run_routes" {
-            posted = self.priced_run(&posted)?;
+        if let Some(st) = &self.stopped {
+            return Err(format!("resync: the game stopped at action {}", st.action_id));
         }
-        let mut with_id = posted.clone();
-        with_id["id"] = json!(self.current_action_id + 1);
-        let step = self.append(&with_id)?;
-        Ok((with_id, step))
-    }
-
-    /// A `run_routes` to post, with each route's revenue as the engine prices it (the server trusts a posted
-    /// revenue: §0). Refuses a stated revenue that differs.
-    pub fn priced_run(&self, a: &Value) -> Result<Value, String> {
-        let mut out = a.clone();
-        let entity = super::json::entity_of(a).map_err(|e| refused(e.message))?;
-        let translated = if self.swapped.is_empty() { a.clone() } else { swap_city_refs(a, &self.swapped) };
-        let action = action_from_json(&translated).map_err(|e| refused(e.message))?;
-        let Action::RunRoutes { routes, .. } = action else { return Err(refused("not a run")) };
-        let (auto, train_ids, _) = self.game.clone_for_search().optimal_routes(&entity);
-        for (k, r) in routes.iter().enumerate() {
-            // only the auto-router's runs are posted (runs drawn by hand are out of the spike): its revenue is the
-            // engine's own pricing of exactly this route
-            let rev = auto
-                .iter()
-                .find(|c| train_ids.get(c.train_index) == Some(&r.train_name) && c.connections == r.connections)
-                .map(|c| c.revenue)
-                .ok_or_else(|| unsupported("a run the auto-router didn't make (runs drawn by hand)"))?;
-            if let Some(stated) = r.revenue {
-                if stated != rev {
-                    return Err(refused(format!("route {} states ${stated}; the engine prices it at ${rev}", k + 1)));
-                }
-            }
-            out["routes"][k]["revenue"] = json!(rev);
-        }
-        Ok(out)
+        let now = super::authority::now_secs();
+        let d = super::authority::decide(self, a, None, now)?;
+        Ok((d.action, d.step))
     }
 
     /// 1867: the loans a company owes interest on (Ruby `loans_due_interest`: the operating round's count, which
@@ -1036,6 +1054,7 @@ impl SiteGame {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn acts(xs: &[(i64, &str, Option<i64>)]) -> Vec<Value> {
         xs.iter()

@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_BAD_INPUT: i32 = 2;
 pub const EXIT_UNSUPPORTED: i32 = 3;
+/// A bug the engine caught itself (an `internal:` error; a panic is 101)
+pub const EXIT_INTERNAL: i32 = 4;
 
 /// What `version` prints (and `WasmGame.version()` returns).
 pub fn version() -> Value {
@@ -21,11 +23,14 @@ pub fn version() -> Value {
     if cfg!(feature = "site-titles") {
         features.push("site-titles");
     }
+    // step 3a (docs/SITE_ENGINE_RS_STEP3.md §10, K1'): `act` makes the programs' auto actions and accepts any valid
+    // run; the CLI has `move`, `start`, `view` (K3')
+    features.extend(["programs", "route_check", "authority"]);
     json!({"engine": "engine-rs", "commit": super::COMMIT, "api": super::API_VERSION, "key": super::KEY_VERSION,
            "titles": super::TITLES, "features": features})
 }
 
-fn fail(code: i32, msg: impl Into<String>) -> (i32, Value) {
+pub fn fail(code: i32, msg: impl Into<String>) -> (i32, Value) {
     (code, json!({"ok": false, "error": msg.into()}))
 }
 
@@ -95,17 +100,14 @@ pub fn keys(input: &Value) -> (i32, Value) {
     (EXIT_OK, json!({"ok": true, "positions": positions, "stopped": stop_json(&g), "ms": ms_since(t)}))
 }
 
-/// `act {"game", "action", "add_auto_actions"}` -> `{"action": <the site action as Rust would store it> | null,
-/// "error": null | "<words>", "state": <key after, or now when refused>}`. Rust has no Programmer: with
-/// `add_auto_actions: true` the answer is unsupported (exit 3).
+/// `act {"game", "action"}` -> `{"action": <the site action as Rust would store it, its auto actions Rust's> | null,
+/// "error": null | "<words>", "state": <key after, or now when refused>}` (step 3a: the authority's checks and
+/// Programmer, `SiteGame::act`; `add_auto_actions` is ignored: Rust always makes them).
 pub fn act(input: &Value) -> (i32, Value) {
     let Some(game) = input.get("game") else { return fail(EXIT_BAD_INPUT, "bad input: no `game`") };
     let Some(action) = input.get("action").filter(|a| a.is_object()) else {
         return fail(EXIT_BAD_INPUT, "bad input: no `action` object");
     };
-    if input.get("add_auto_actions").and_then(Value::as_bool).unwrap_or(false) {
-        return fail(EXIT_UNSUPPORTED, "unsupported: add_auto_actions (the Rust engine has no Programmer in step 1)");
-    }
     let mut g = match load(game) {
         Ok(g) => g,
         Err(e) => return e,
@@ -142,6 +144,9 @@ pub fn run(cmd: &str, input: &str) -> (i32, Value) {
         "state" => state(&parsed),
         "keys" => keys(&parsed),
         "act" => act(&parsed),
-        other => fail(EXIT_BAD_INPUT, format!("bad input: unknown command {other:?} (version, state, keys, act)")),
+        "move" => super::authority::move_json(&parsed),
+        "start" => super::authority::start_json(&parsed),
+        "view" => super::authority::view_json(&parsed),
+        other => fail(EXIT_BAD_INPUT, format!("bad input: unknown command {other:?} (version, state, keys, act, move, start, view)")),
     }
 }

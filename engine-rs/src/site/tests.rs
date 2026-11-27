@@ -99,15 +99,19 @@ fn every_stored_run_is_priced_as_stored() {
 fn the_cli_keeps_its_contract() {
     let (code, v) = cli::run("version", "");
     assert_eq!(code, 0);
-    assert_eq!((v["api"].clone(), v["key"].clone(), v["engine"].clone()), (json!(2), json!(2), json!("engine-rs")));
+    assert_eq!((v["api"].clone(), v["key"].clone(), v["engine"].clone()), (json!(3), json!(2), json!("engine-rs")));
+    for f in ["programs", "route_check", "authority"] {
+        assert!(v["features"].as_array().unwrap().contains(&json!(f)), "{f}");
+    }
     assert_eq!(cli::run("state", "not json").0, cli::EXIT_BAD_INPUT);
     assert_eq!(cli::run("state", "{}").0, cli::EXIT_BAD_INPUT);
     assert_eq!(cli::run("nope", "{}").0, cli::EXIT_BAD_INPUT);
     let other = json!({"game": {"title": "1889", "players": [{"id": 1}, {"id": 2}], "actions": []}});
     assert_eq!(cli::run("state", &other.to_string()).0, cli::EXIT_UNSUPPORTED);
     let data = fixture("consent_log_undo");
+    // step 3a: Rust makes the auto actions itself (add_auto_actions is accepted and ignored)
     let auto = json!({"game": data, "action": {"type": "pass", "entity": 3, "entity_type": "player"}, "add_auto_actions": true});
-    assert_eq!(cli::act(&auto).0, cli::EXIT_UNSUPPORTED);
+    assert_eq!(cli::act(&auto).0, cli::EXIT_OK);
     // a move of the player to act: stored with the next id
     let (code, out) = cli::act(&json!({"game": data, "action": {"type": "pass", "entity": 3, "entity_type": "player"}}));
     assert_eq!(code, 0);

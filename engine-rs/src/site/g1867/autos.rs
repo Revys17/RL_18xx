@@ -18,7 +18,7 @@ use crate::title::CrossPlayerPolicy;
 use serde_json::{json, Value};
 
 /// The step auto action Ruby would make now, if any: the passing entity (a corporation's sym).
-fn next_auto(g: &mut BaseGame) -> Option<String> {
+pub(crate) fn next_auto(g: &mut BaseGame) -> Option<String> {
     if g.finished {
         return None;
     }

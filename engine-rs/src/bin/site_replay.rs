@@ -5,6 +5,7 @@
 //!     [--report <json>] [--views] [--goldens <dir>] [--verbose] [--digest] [--title 1830|1867]
 //!     [--acts <cases.jsonl> [--acts-every N] [--acts-tiles N]]   (§8.3, K11)
 //!     [--act-check]   (1867: every recorded move checked by the generator, the step autos predicted)
+//!     [--authority]   (step 3a: every kept move decided at its position as `site_engine move` decides it)
 //!     --generate N [--seed S] [--moves M] [--out DIR]   (1867 generated games, SITE_ENGINE_RS_1867.md §10.4)
 //!
 //! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
@@ -50,6 +51,7 @@ fn main() {
     let mut only_title: Option<String> = None;
     let mut dump: Option<i64> = None;
     let mut act_check = false;
+    let mut authority = false;
     let mut generate: Option<usize> = None;
     let mut gen_seed: u64 = 1;
     let mut gen_moves: usize = 3000;
@@ -82,6 +84,7 @@ fn main() {
             }
             "--verbose" => verbose = true,
             "--act-check" => act_check = true,
+            "--authority" => authority = true,
             "--ruby-dead-ends" => gen_dead_ends = true,
             "--generate" => {
                 generate = argv.get(i + 1).and_then(|x| x.parse::<usize>().ok());
@@ -260,6 +263,14 @@ fn main() {
                 continue;
             }
         };
+        if authority {
+            // step 3a (docs/SITE_ENGINE_RS_STEP3.md §12.1 A1): every kept move decided at its position as `move`
+            // decides it, against the record (auto actions, a run's fields)
+            g.site_log = false;
+            let r = engine_rs::site::authority::corpus_check(&mut g);
+            println!("{}", json!({"game": gid, "file": path.display().to_string(), "check": r}));
+            continue;
+        }
         if act_check {
             // 1867 (docs/SITE_ENGINE_RS_1867.md §3.2-§3.3): every recorded move the generator must accept on the position
             // before it, and Ruby's recorded step auto actions after it = the predicted ones (games without programs)
