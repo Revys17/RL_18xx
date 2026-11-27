@@ -4,6 +4,8 @@
 //! cargo run --release --no-default-features --features site --bin site_replay -- [<corpus dir or game .json>...]
 //!     [--report <json>] [--views] [--goldens <dir>] [--verbose] [--digest] [--title 1830|1867]
 //!     [--acts <cases.jsonl> [--acts-every N] [--acts-tiles N]]   (§8.3, K11)
+//!     [--act-check]   (1867: every recorded move checked by the generator, the step autos predicted)
+//!     --generate N [--seed S] [--moves M] [--out DIR]   (1867 generated games, SITE_ENGINE_RS_1867.md §10.4)
 //!
 //! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
 //! the Opal goldens (B's `test/rust/golden.cjs`) where they exist.
@@ -48,6 +50,11 @@ fn main() {
     let mut only_title: Option<String> = None;
     let mut dump: Option<i64> = None;
     let mut act_check = false;
+    let mut generate: Option<usize> = None;
+    let mut gen_seed: u64 = 1;
+    let mut gen_moves: usize = 3000;
+    let mut gen_out: Option<String> = None;
+    let mut gen_dead_ends = false;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -75,6 +82,23 @@ fn main() {
             }
             "--verbose" => verbose = true,
             "--act-check" => act_check = true,
+            "--ruby-dead-ends" => gen_dead_ends = true,
+            "--generate" => {
+                generate = argv.get(i + 1).and_then(|x| x.parse::<usize>().ok());
+                i += 1;
+            }
+            "--seed" => {
+                gen_seed = argv.get(i + 1).and_then(|x| x.parse::<u64>().ok()).unwrap_or(1);
+                i += 1;
+            }
+            "--moves" => {
+                gen_moves = argv.get(i + 1).and_then(|x| x.parse::<usize>().ok()).unwrap_or(3000);
+                i += 1;
+            }
+            "--out" => {
+                gen_out = argv.get(i + 1).cloned();
+                i += 1;
+            }
             "--dump" => {
                 dump = argv.get(i + 1).and_then(|x| x.parse::<i64>().ok());
                 i += 1;
@@ -86,6 +110,21 @@ fn main() {
             a => inputs.push(a.to_string()),
         }
         i += 1;
+    }
+    if let Some(n) = generate {
+        // docs/SITE_ENGINE_RS_1867.md §10.4: generated 1867 games as site JSON (players 3-6 in turn)
+        let out = gen_out.clone().unwrap_or_else(|| ".".into());
+        std::fs::create_dir_all(&out).unwrap();
+        for k in 0..n {
+            let seed = gen_seed + k as u64;
+            let players = 3 + (k % 4);
+            let t0 = Instant::now();
+            let game = engine_rs::site::g1867::generate::generate(seed, players, gen_moves, 0.8, gen_dead_ends);
+            let info = game["generated"].clone();
+            std::fs::write(format!("{out}/gen-{seed}.json"), game.to_string()).unwrap();
+            println!("{}", json!({"seed": seed, "players": players, "ms": t0.elapsed().as_millis() as u64, "info": info}));
+        }
+        return;
     }
     if inputs.is_empty() {
         inputs.push(std::env::var("CORPUS").unwrap_or_else(|_| {
