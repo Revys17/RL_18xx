@@ -1643,6 +1643,15 @@ def build_parser():
         "evals played). Repeatable (rl18xx/agent/advisor/titled.py)",
     )
     p.add_argument(
+        "--title-search", type=str, action="append", default=[],
+        metavar="TITLE=CRITIC[#HEAD][@READOUTS][/C_PUCT][:OPTIONS]",
+        help="--bots: search TITLE's bot moves instead of playing --title-policy's own: the Rust tree over the "
+        "title's moves with that policy's priors (at its T unless :ptemp=) and price cells and this title-generic "
+        "critic's values (#score by default; #win, #blend=<w>; 'self': the policy's own heads), the most visited "
+        "move played. Default the 1830 bots' settings: @400/0.05:mean,dedupe,par=8 (rl18xx/agent/alphazero/"
+        "generic_search.py). Repeatable, one per title",
+    )
+    p.add_argument(
         "--bot-settings", type=str, default="~/.config/18xx/bot_hub.json",
         help="The bots' settings, as the admin page saves them (default: ~/.config/18xx/bot_hub.json)",
     )

@@ -37,6 +37,8 @@ use rand_distr::{Dirichlet, Distribution};
 use crate::factored::LegalAction;
 use crate::game::BaseGame;
 use crate::price_pmf::{proposal_order, PriceCells, NUM_CELLS};
+use crate::rl::generator::GenMove;
+use crate::title::{CrossPlayerPolicy, RlLayoutKind};
 
 /// Value-head width — single-sourced from the encoder's player-slot cap.
 const VALUE_SIZE: usize = crate::encoder::MAX_PLAYERS;
@@ -60,6 +62,177 @@ pub struct PriceComponents {
     /// model's fixed slot layout, the same for every leaf of a batch.
     pub slot_index: Arc<HashMap<(String, Vec<String>), usize>>,
     pub num_slots: usize,
+    /// A generator title's tree ([`TreeMoves::Generator`]): the title-generic
+    /// price head's ``NUM_CELLS`` cell log-probabilities per priced legal
+    /// index of the leaf (cells in step units over the move's own range,
+    /// ``rl::generator::price_cells``). Empty for 1830, whose rows are the
+    /// legacy head's slots above.
+    pub by_index: HashMap<u32, Vec<f32>>,
+}
+
+// ----------------------------------------------------------------------------
+// Where a tree's moves come from
+// ----------------------------------------------------------------------------
+
+/// Where a tree's legal moves, their indices and their prices come from: the
+/// root title's RL layout kind (every node of a tree is one game, so one
+/// title).
+#[derive(Clone, Copy)]
+pub enum TreeMoves {
+    /// 1830 (``RlLayoutKind::Factored``): the factored choices mapped to the
+    /// frozen slot layout, applied by the native decode, priced through the
+    /// legacy price head's slots. Unchanged since before generator titles.
+    Factored(&'static crate::action_index::SlotLayout),
+    /// A title whose legal moves come from its own generator (1867, the 1822
+    /// family; ``RlLayoutKind::Generator``): the generator's moves under the
+    /// title's own cross-player policy (what the generic policy-gradient runs
+    /// trained on), their indices in the title's registry layout, a priced
+    /// move's legal prices ``lo + step * k <= hi`` with cells in step units
+    /// (``rl::generator::price_cells``) and its price row per legal index
+    /// (``PriceComponents::by_index``). A single legal move whose price is
+    /// still open is a node of its own (a decision), not part of a forced
+    /// chain: there is no price row for it at the chain's start.
+    Generator {
+        layout: &'static crate::rl::RlLayout,
+        g1822: bool,
+        policy: CrossPlayerPolicy,
+    },
+}
+
+impl TreeMoves {
+    /// The moves of ``game``'s title (``from_game``): a generator layout, the
+    /// factored slot layout, or the "not bridge-ready" error.
+    fn for_game(game: &BaseGame) -> PyResult<Self> {
+        if game.title_def().rl_layout_kind() == RlLayoutKind::Generator {
+            return Ok(TreeMoves::Generator {
+                layout: game.rl_generator_layout()?,
+                g1822: game.g1822.is_some(),
+                policy: game.title_def().generator_cross_player(),
+            });
+        }
+        Ok(TreeMoves::Factored(game.factored_layout()?))
+    }
+
+    /// The layout's index count (dense policy vectors).
+    pub fn total(&self) -> u32 {
+        match self {
+            TreeMoves::Factored(lo) => lo.total,
+            TreeMoves::Generator { layout, .. } => layout.total,
+        }
+    }
+
+    pub fn is_generator(&self) -> bool {
+        matches!(self, TreeMoves::Generator { .. })
+    }
+}
+
+/// A generator node's legal moves, aligned with its ``legal_action_indices``
+/// (ascending index), kept so a child applies its move without generating
+/// the parent's moves again.
+#[derive(Clone)]
+pub enum GenMoves {
+    G1867(Vec<crate::g1867::legal::Move>),
+    G1822(Vec<crate::g1822::legal::Move>),
+}
+
+impl GenMoves {
+    fn range(&self, pos: usize) -> Option<crate::g1867::legal::PriceRange> {
+        match self {
+            GenMoves::G1867(v) => v[pos].price_range(),
+            GenMoves::G1822(v) => v[pos].price_range(),
+        }
+    }
+
+    /// Apply move ``pos`` at ``price`` (on the move's grid; None: the move as
+    /// generated) and log its action dict, as ``rl_apply_index`` does.
+    fn apply(&self, game: &mut BaseGame, pos: usize, price: Option<i64>) -> PyResult<()> {
+        let price = price.map(|p| p as i32);
+        let result = match self {
+            GenMoves::G1867(v) => crate::rl::generator::priced(v[pos].clone(), price)
+                .and_then(|m| game.rl_apply_move_of(&m)),
+            GenMoves::G1822(v) => crate::rl::generator::priced(v[pos].clone(), price)
+                .and_then(|m| game.rl_apply_move_of(&m)),
+        };
+        result.map(|_| ()).map_err(|e| PyRuntimeError::new_err(format!("generator move {pos} failed: {}", e.message)))
+    }
+}
+
+/// The player who decides a generator title's position -- whose value a
+/// search node backs up: the encoder's mover (``rl_mover_id``), except 1867's
+/// stock-round home token. With ``HOME_TOKEN_TIMING = :par`` a minor's home
+/// city is chosen by its opening bidder (a major's by the player who pars it)
+/// while the minor has no owner yet, so the encoder has no mover there (seat 0
+/// by default: the first player); the chooser is recorded with the pending
+/// token. None for a finished game.
+pub fn generator_decider_id(game: &BaseGame) -> Option<u32> {
+    if game.g1822.is_none() && !game.finished {
+        if let crate::rounds::Round::Stock(s) = &game.round {
+            if let Some(&(_, chooser)) = s.pending_home_tokens.first() {
+                return Some(chooser);
+            }
+        }
+    }
+    game.rl_mover_id()
+}
+
+/// A generator position's legal moves (``TreeMoves::Generator``), ascending
+/// by index.
+struct GenLegal {
+    indices: Vec<u32>,
+    moves: GenMoves,
+}
+
+impl GenLegal {
+    fn generate(moves: TreeMoves, game: &mut BaseGame) -> PyResult<GenLegal> {
+        let TreeMoves::Generator { g1822, policy, .. } = moves else {
+            return Err(PyRuntimeError::new_err("not a generator tree"));
+        };
+        let err = |e: crate::actions::GameError| PyRuntimeError::new_err(format!("legal moves: {}", e.message));
+        Ok(if g1822 {
+            let v = game.rl_indexed_moves_of::<crate::g1822::legal::Move>(policy).map_err(err)?;
+            GenLegal { indices: v.iter().map(|x| x.index).collect(), moves: GenMoves::G1822(v.into_iter().map(|x| x.mv).collect()) }
+        } else {
+            let v = game.rl_indexed_moves_of::<crate::g1867::legal::Move>(policy).map_err(err)?;
+            GenLegal { indices: v.iter().map(|x| x.index).collect(), moves: GenMoves::G1867(v.into_iter().map(|x| x.mv).collect()) }
+        })
+    }
+
+    /// Whether the position is a forced move: one legal move with no price
+    /// left to choose (``generic_play.TitlePlay.is_decision`` false).
+    fn forced(&self) -> bool {
+        self.indices.len() == 1 && self.moves.range(0).map_or(true, |r| r.lo == r.hi)
+    }
+}
+
+/// The price cells of a price-bearing move as the tree reads them: in price
+/// space (1830, the legacy cells), or (a generator title) in step units over
+/// ``[0, (hi - lo) / step]`` with prices ``lo + step * k``, so every cell
+/// holds legal prices only -- the cells the generic price head scores.
+pub(crate) struct TreeCells {
+    cells: PriceCells,
+    grid: Option<(i64, i64)>,
+}
+
+impl TreeCells {
+    pub(crate) fn cell_of(&self, price: i64) -> Option<usize> {
+        match self.grid {
+            None => self.cells.cell_of(price),
+            Some((lo, step)) if price >= lo && (price - lo) % step == 0 => self.cells.cell_of((price - lo) / step),
+            Some(_) => None,
+        }
+    }
+
+    pub(crate) fn nonempty(&self, cell: usize) -> bool {
+        self.cells.nonempty(cell)
+    }
+
+    pub(crate) fn sample_price<R: Rng>(&self, cell: usize, rng: &mut R) -> i64 {
+        let k = self.cells.sample_price(cell, rng);
+        match self.grid {
+            None => k,
+            Some((lo, step)) => lo + step * k,
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -78,7 +251,15 @@ pub struct RustMCTSNode {
     pub price_ranges: HashMap<u32, (i64, i64)>,
     /// Action-type name per legal slot (e.g. "Bid"/"BuyTrain"/"BuyCompany"/
     /// "Pass"/...). Populated alongside ``price_ranges`` at node construction.
+    /// A generator title's node: the ``price_pmf`` cell type of each priced
+    /// move's price kind ("" for the rest).
     pub action_types: HashMap<u32, String>,
+    /// A generator title's node: each priced move's price step (its legal
+    /// prices are ``lo + step * k <= hi``). Empty for 1830.
+    pub price_steps: HashMap<u32, i64>,
+    /// A generator title's node: its legal moves, aligned with
+    /// ``legal_action_indices``. None for 1830.
+    pub gen_moves: Option<GenMoves>,
     pub child_n: Vec<f32>,           // [num_legal]
     pub child_w: Vec<[f32; VALUE_SIZE]>,
     /// Virtual losses in flight through each child (``mean_q`` uses them to
@@ -308,20 +489,105 @@ pub struct RustMCTSPlayer {
     /// rest of an expansion late in a game. Games handed to Python get the
     /// whole log back (``full_game``).
     pub root_log: Vec<serde_json::Value>,
-    /// The action layout of the root game's title (every node of a tree is
-    /// one game, so one title): flat indices, dense policy vectors and the
-    /// legacy price-head keys all read it. A title without a layout is
-    /// refused at construction ("not bridge-ready").
-    pub layout: &'static crate::action_index::SlotLayout,
+    /// Where the root game's title gets its moves (every node of a tree is
+    /// one game, so one title): 1830's factored slot layout (flat indices,
+    /// dense policy vectors, the legacy price-head keys) or a generator
+    /// title's registry layout. A title without a layout is refused at
+    /// construction ("not bridge-ready").
+    pub moves: TreeMoves,
 }
 
 impl RustMCTSPlayer {
+    /// A generator title's node at ``game`` (``TreeMoves::Generator``):
+    /// ``legal`` = the position's moves when the caller already generated
+    /// them (the forced-chain check at the same position).
+    fn build_generator_node(
+        &self,
+        mut game: BaseGame,
+        fmove: Option<u32>,
+        parent: Option<usize>,
+        legal: Option<GenLegal>,
+    ) -> PyResult<RustMCTSNode> {
+        let TreeMoves::Generator { layout, .. } = self.moves else {
+            return Err(PyRuntimeError::new_err("not a generator tree"));
+        };
+        let is_terminal = game.is_finished_pub();
+        let legal = match legal {
+            Some(l) => l,
+            None if is_terminal => GenLegal { indices: Vec::new(), moves: GenMoves::G1867(Vec::new()) },
+            None => GenLegal::generate(self.moves, &mut game)?,
+        };
+        let mut price_ranges: HashMap<u32, (i64, i64)> = HashMap::new();
+        let mut price_steps: HashMap<u32, i64> = HashMap::new();
+        let mut action_types: HashMap<u32, String> = HashMap::new();
+        for (pos, &idx) in legal.indices.iter().enumerate() {
+            let cell_type = layout
+                .descriptor(idx)
+                .and_then(|d| crate::rl::descriptor::PRICE_KINDS.get(usize::try_from(d.price_kind).ok()?))
+                .and_then(|k| k.cell_type());
+            action_types.insert(idx, cell_type.unwrap_or("").to_string());
+            if let Some(r) = legal.moves.range(pos) {
+                price_ranges.insert(idx, (r.lo as i64, r.hi as i64));
+                price_steps.insert(idx, r.step.max(1) as i64);
+            }
+        }
+        let num_legal = legal.indices.len();
+        let mut player_ids: Vec<u32> = game.players_for_factored().iter().map(|p| p.id).collect();
+        player_ids.sort_unstable();
+        // The player deciding here, whose value the node backs up
+        // (``generator_decider_id``): the encoder's mover -- 1867's
+        // ``acting_player_id_pub`` (a corporation's turn: its president), the
+        // 1822 family's active step entity's -- except 1867's stock-round home
+        // token, chosen by the opening bidder before the minor has an owner.
+        let active_pid = generator_decider_id(&game).unwrap_or(player_ids[0]);
+        let active_player_index = player_ids.iter().position(|&p| p == active_pid).unwrap_or(0);
+        let num_players = player_ids.len();
+        Ok(RustMCTSNode {
+            game,
+            fmove,
+            parent,
+            parent_compressed_idx: 0,
+            is_expanded: false,
+            losses_applied: 0,
+            legal_action_indices: legal.indices,
+            price_ranges,
+            action_types,
+            price_steps,
+            gen_moves: Some(legal.moves),
+            child_n: vec![0.0; num_legal],
+            child_vl: vec![0.0; num_legal],
+            child_w2: vec![0.0; num_legal],
+            child_w: vec![[0.0; VALUE_SIZE]; num_legal],
+            child_prior: vec![0.0; num_legal],
+            original_prior: vec![0.0; num_legal],
+            children: HashMap::new(),
+            price_children: HashMap::new(),
+            price_child_n: HashMap::new(),
+            price_child_w: HashMap::new(),
+            price_child_vl: HashMap::new(),
+            forced_action_chain: Vec::new(),
+            active_player_index,
+            num_players,
+            depth: 0,
+            is_terminal,
+            sampled_price: None,
+            is_price_grandchild: false,
+            price_components: None,
+            price_proposals: HashMap::new(),
+            raw_value: [0.0; VALUE_SIZE],
+        })
+    }
+
     fn build_node(
         &self,
         game: BaseGame,
         fmove: Option<u32>,
         parent: Option<usize>,
     ) -> PyResult<RustMCTSNode> {
+        let layout = match self.moves {
+            TreeMoves::Factored(lo) => lo,
+            TreeMoves::Generator { .. } => return self.build_generator_node(game, fmove, parent, None),
+        };
         // Enumerate factored legal actions; encode each to a flat policy
         // slot; dedupe; also record price ranges + action types.
         let mut game = game;
@@ -332,7 +598,7 @@ impl RustMCTSPlayer {
         let mut action_types: HashMap<u32, String> = HashMap::new();
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for la in &choices {
-            let idx = match crate::action_index::legal_action_to_index_in(self.layout, la) {
+            let idx = match crate::action_index::legal_action_to_index_in(layout, la) {
                 Some(i) => i,
                 None => continue,
             };
@@ -376,6 +642,8 @@ impl RustMCTSPlayer {
             legal_action_indices,
             price_ranges,
             action_types,
+            price_steps: HashMap::new(),
+            gen_moves: None,
             child_n: vec![0.0; num_legal],
             child_vl: vec![0.0; num_legal],
             child_w2: vec![0.0; num_legal],
@@ -418,7 +686,7 @@ impl RustMCTSPlayer {
         min_price_children: Option<usize>,
         price_explore_eps: Option<f32>,
     ) -> PyResult<Self> {
-        let layout = game.factored_layout()?;
+        let moves = TreeMoves::for_game(&game)?;
         let root_log = std::mem::take(&mut game.action_log);
         let mut player = RustMCTSPlayer {
             arena: Vec::new(),
@@ -447,7 +715,7 @@ impl RustMCTSPlayer {
             gumbel: None,
             gumbel_search: None,
             root_log,
-            layout,
+            moves,
         };
         let root = player.build_node(game, None, None)?;
         player.num_players = root.num_players;
@@ -605,7 +873,7 @@ impl RustMCTSPlayer {
     /// policy size). Non-legal slots stay 0.
     fn child_n_at_root(&self) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; self.layout.total as usize];
+        let mut out = vec![0.0f32; self.moves.total() as usize];
         for (i, &flat) in root.legal_action_indices.iter().enumerate() {
             out[flat as usize] = root.child_n[i];
         }
@@ -959,6 +1227,11 @@ impl RustMCTSPlayer {
                 },
             }
             .clamp(price_range.0, price_range.1);
+            // A generator title's prices lie on the move's grid (lo + step * k).
+            let p = match self.arena[arena_idx].price_steps.get(&action_index) {
+                Some(&step) if step > 1 => price_range.0 + (p - price_range.0) / step * step,
+                _ => p,
+            };
             // Existing-grandchild fast path.
             if let Some(slot_grandchildren) = self.arena[arena_idx].price_children.get(&action_index) {
                 if let Some(&existing_idx) = slot_grandchildren.get(&p) {
@@ -973,6 +1246,11 @@ impl RustMCTSPlayer {
             (None, None)
         };
 
+        if self.moves.is_generator() {
+            return self.add_generator_child(arena_idx, action_index, parent_compressed_idx, sampled_price, is_pw);
+        }
+        let TreeMoves::Factored(layout) = self.moves else { unreachable!() };
+
         // Clone the parent's game and apply the action via the native decode.
         let mut new_game = self.arena[arena_idx].game.clone_for_search();
         apply_action(&mut new_game, action_index, expansion_price_for_apply)?;
@@ -985,7 +1263,7 @@ impl RustMCTSPlayer {
             if new_game.is_finished_pub() || self.root_log.len() + new_game.action_log.len() >= self.max_game_length {
                 break;
             }
-            let Some((forced_idx, forced_range, forced_type)) = single_legal_move(self.layout, &mut new_game) else {
+            let Some((forced_idx, forced_range, forced_type)) = single_legal_move(layout, &mut new_game) else {
                 break;
             };
             // Python's forced loop draws a price from the price head for
@@ -1155,7 +1433,7 @@ impl RustMCTSPlayer {
         price_components: Option<PyObject>,
     ) -> PyResult<()> {
         let probs_slice = probs.as_slice()?;
-        let policy_size = self.layout.total;
+        let policy_size = self.moves.total();
         if probs_slice.len() != policy_size as usize {
             return Err(PyValueError::new_err(format!(
                 "probs length {} != policy size {}",
@@ -1464,20 +1742,89 @@ impl RustMCTSPlayer {
 }
 
 impl RustMCTSPlayer {
+    /// ``maybe_add_child``'s expansion for a generator title: the parent's
+    /// stored move ``action_index`` applied at ``price`` (its action dict
+    /// logged), then forced moves -- a single legal move with no price left
+    /// to choose -- until a decision or the end; the position's moves are
+    /// generated once and become the child's.
+    fn add_generator_child(
+        &mut self,
+        arena_idx: usize,
+        action_index: u32,
+        parent_compressed_idx: usize,
+        price: Option<i64>,
+        is_pw: bool,
+    ) -> PyResult<usize> {
+        let mut new_game = self.arena[arena_idx].game.clone_for_search();
+        {
+            let parent = &self.arena[arena_idx];
+            let moves = parent
+                .gen_moves
+                .as_ref()
+                .ok_or_else(|| PyRuntimeError::new_err("a generator node without its moves"))?;
+            moves.apply(&mut new_game, parent_compressed_idx, price)?;
+        }
+        let mut forced_chain: Vec<u32> = Vec::new();
+        let mut legal: Option<GenLegal> = None;
+        loop {
+            if new_game.is_finished_pub() || self.root_log.len() + new_game.action_log.len() >= self.max_game_length {
+                break;
+            }
+            let here = GenLegal::generate(self.moves, &mut new_game)?;
+            if !here.forced() {
+                legal = Some(here);
+                break;
+            }
+            let lo = here.moves.range(0).map(|r| r.lo as i64);
+            here.moves.apply(&mut new_game, 0, lo)?;
+            forced_chain.push(here.indices[0]);
+        }
+        let depth = self.arena[arena_idx].depth + 1;
+        let mut child = self.build_generator_node(new_game, Some(action_index), Some(arena_idx), legal)?;
+        child.parent_compressed_idx = parent_compressed_idx;
+        child.forced_action_chain = forced_chain;
+        child.depth = depth;
+        child.sampled_price = price;
+        child.is_price_grandchild = is_pw;
+        let child_idx = self.arena.len();
+        self.arena.push(child);
+        self.register_child(arena_idx, action_index, child_idx, price, is_pw);
+        Ok(child_idx)
+    }
+
+    /// Record ``child_idx`` under its parent: a price grandchild of PW slot
+    /// ``action_index`` at ``price`` (fresh statistics) or the move's child.
+    fn register_child(&mut self, arena_idx: usize, action_index: u32, child_idx: usize, price: Option<i64>, is_pw: bool) {
+        let node = &mut self.arena[arena_idx];
+        if is_pw {
+            let p = price.expect("a price grandchild has a price");
+            node.price_children.entry(action_index).or_default().insert(p, child_idx);
+            node.price_child_n.entry(action_index).or_default().insert(p, 0.0);
+            node.price_child_w.entry(action_index).or_default().insert(p, [0.0; VALUE_SIZE]);
+            node.price_child_vl.entry(action_index).or_default().insert(p, 0.0);
+        } else {
+            node.children.insert(action_index, child_idx);
+        }
+    }
+
     /// The game at the first single legal move with an open price in
     /// ``child_idx``'s forced chain: the root's game with the child's move (at
     /// its price) and the forced moves before that one; None if the chain has
-    /// none (``advance_root``'s ``stop_at_open_price``).
+    /// none (``advance_root``'s ``stop_at_open_price``). A generator title's
+    /// chain never holds one (it stops there: ``add_generator_child``).
     fn game_at_open_price_in_chain(&self, child_idx: usize) -> PyResult<Option<BaseGame>> {
         let child = &self.arena[child_idx];
         if child.forced_action_chain.is_empty() {
             return Ok(None);
         }
+        let TreeMoves::Factored(layout) = self.moves else {
+            return Ok(None);
+        };
         let action = child.fmove.ok_or_else(|| PyRuntimeError::new_err("a root child without its move"))?;
         let mut game = self.arena[self.root_idx].game.clone_for_search();
         apply_action(&mut game, action, child.sampled_price)?;
         for &recorded in &child.forced_action_chain {
-            let (forced_idx, range, _) = single_legal_move(self.layout, &mut game)
+            let (forced_idx, range, _) = single_legal_move(layout, &mut game)
                 .ok_or_else(|| PyRuntimeError::new_err("forced chain replay: no single legal move"))?;
             if forced_idx != recorded {
                 return Err(PyRuntimeError::new_err("forced chain replay diverged"));
@@ -1573,7 +1920,7 @@ impl RustMCTSPlayer {
     /// c_puct, priors), as ``argmax_action_score`` scores them after the search.
     pub fn pruned_child_n_at_root(&self) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; self.layout.total as usize];
+        let mut out = vec![0.0f32; self.moves.total() as usize];
         let num_legal = root.legal_action_indices.len();
         if num_legal == 0 {
             return out;
@@ -1624,7 +1971,7 @@ impl RustMCTSPlayer {
     /// temperature scaling. Mirrors Python ``MCTSNode.children_as_pi``.
     pub fn pi_at_root(&self, temperature: f32) -> Vec<f32> {
         let root = &self.arena[self.root_idx];
-        let mut out = vec![0.0f32; self.layout.total as usize];
+        let mut out = vec![0.0f32; self.moves.total() as usize];
         let num_legal = root.legal_action_indices.len();
         if num_legal == 0 {
             return out;
@@ -1896,23 +2243,42 @@ impl RustMCTSPlayer {
     /// ``arena_idx``, if the node has price components and the slot maps.
     fn slot_logits(&self, arena_idx: usize, action_index: u32, action_type: &str) -> Option<&[f32]> {
         let pc = self.arena[arena_idx].price_components.as_ref()?;
-        let key = price_head_entity_key(self.layout, action_index, action_type)?;
+        let layout = match self.moves {
+            TreeMoves::Factored(lo) => lo,
+            // A generator title's rows are per legal index.
+            TreeMoves::Generator { .. } => return pc.by_index.get(&action_index).map(|v| v.as_slice()),
+        };
+        let key = price_head_entity_key(layout, action_index, action_type)?;
         let &slot = pc.slot_index.get(&key)?;
         pc.price_logits.get(slot * NUM_CELLS..(slot + 1) * NUM_CELLS)
     }
 
-    /// ``(PriceCells, cell probabilities)`` of a price-bearing slot — mirrors
+    /// ``(cells, cell probabilities)`` of a price-bearing slot — mirrors
     /// Python ``_slot_cell_probs``. Without logits (or with non-finite ones)
-    /// the cells are uniform.
-    fn slot_cells(
+    /// the cells are uniform. A generator title's cells are in step units over
+    /// the move's own range (``rl::generator::price_cells``: the generic price
+    /// head's), ``action_type`` its price kind's cell type.
+    pub(crate) fn slot_cells(
         &self,
         arena_idx: usize,
         action_index: u32,
         action_type: &str,
         price_range: (i64, i64),
-    ) -> Option<(PriceCells, [f64; NUM_CELLS])> {
-        let cells = PriceCells::new(action_type, price_range.0, price_range.1, bid_step(self.layout))?;
-        let probs = cells.cell_probs(self.slot_logits(arena_idx, action_index, action_type));
+    ) -> Option<(TreeCells, [f64; NUM_CELLS])> {
+        let cells = match self.moves {
+            TreeMoves::Factored(layout) => TreeCells {
+                cells: PriceCells::new(action_type, price_range.0, price_range.1, bid_step(layout))?,
+                grid: None,
+            },
+            TreeMoves::Generator { .. } => {
+                let step = self.arena[arena_idx].price_steps.get(&action_index).copied().unwrap_or(1).max(1);
+                TreeCells {
+                    cells: PriceCells::new(action_type, 0, (price_range.1 - price_range.0) / step, 1)?,
+                    grid: Some((price_range.0, step)),
+                }
+            }
+        };
+        let probs = cells.cells.cell_probs(self.slot_logits(arena_idx, action_index, action_type));
         Some((cells, probs))
     }
 
@@ -2046,6 +2412,12 @@ impl RustMCTSPlayer {
     /// ``config.c_puct_by_round.get(round_name, config.c_puct_init)`` keyed
     /// by the round class name.
     fn c_puct_init_for(&self, arena_idx: usize) -> f32 {
+        if self.moves.is_generator() {
+            // A generator title's round kind (the 1822 family keeps its own
+            // rounds): "Auction" / "Stock" / "Operating" / "Merger" / "Choices".
+            let name = self.arena[arena_idx].game.rl_round_kind();
+            return self.c_puct_by_round.get(name).copied().unwrap_or(self.c_puct_init);
+        }
         let name = match &self.arena[arena_idx].game.round {
             crate::rounds::Round::Auction(_) => "Auction",
             crate::rounds::Round::Stock(_) => "Stock",
@@ -2273,10 +2645,26 @@ fn decode_price_components(py: Python<'_>, dict: &Bound<'_, PyAny>) -> PyResult<
 
     let slot_index = decode_slot_index(&slot_index_obj)?;
 
+    // A generator title's rows: ``by_index`` {legal index: NUM_CELLS cell logits}.
+    let mut by_index: HashMap<u32, Vec<f32>> = HashMap::new();
+    if let Some(rows) = d.get_item("by_index")? {
+        if !rows.is_none() {
+            let rows: &Bound<'_, PyDict> = rows.downcast::<PyDict>().map_err(|_| {
+                PyValueError::new_err("price_components by_index must be a dict")
+            })?;
+            for (index, row) in rows.iter() {
+                let flat = np.getattr("ravel")?.call1((np.getattr("asarray")?.call1((row, "float32"))?,))?;
+                let arr: PyReadonlyArray1<'_, f32> = flat.extract()?;
+                by_index.insert(index.extract::<u32>()?, arr.as_slice()?.to_vec());
+            }
+        }
+    }
+
     Ok(PriceComponents {
         price_logits,
         slot_index: Arc::new(slot_index),
         num_slots,
+        by_index,
     })
 }
 
@@ -2355,6 +2743,7 @@ mod tests {
             price_logits: logits,
             slot_index: Arc::new(HashMap::from([(key, 0)])),
             num_slots: 1,
+            by_index: HashMap::new(),
         };
         let num_legal = player.arena[root].legal_action_indices.len();
         player.incorporate(root, vec![1.0; num_legal], [0.25; VALUE_SIZE], Some(pc));
@@ -2497,5 +2886,230 @@ mod tests {
         player.add_virtual_loss(b);
         assert!((player.node_mean_value(b, mover) - 0.40).abs() < 1e-6);
         player.revert_virtual_loss(b);
+    }
+}
+
+/// Trees over generator titles (``TreeMoves::Generator``: 1867, the 1822
+/// family): every node is the generator's position (its legal moves, price
+/// ranges and steps), a child is its parent with the move applied by index
+/// and the forced moves after it, prices lie on each move's grid with cells
+/// in step units read from the per-index price rows, and each node backs up
+/// the deciding player's value.
+#[cfg(test)]
+mod generator_tests {
+    use super::*;
+    use rand::rngs::StdRng;
+
+    /// A 1867 game after ``steps`` random generator moves (the title's
+    /// cross-player policy, prices uniform on each move's grid), or None if it
+    /// ends first.
+    fn walked_1867(players: usize, steps: usize, seed: u64) -> Option<BaseGame> {
+        let mut g = crate::g1867::fuzz::new_game(players);
+        let policy = g.title_def().generator_cross_player();
+        let mut rng = StdRng::seed_from_u64(seed);
+        for _ in 0..steps {
+            if g.finished {
+                return None;
+            }
+            let moves = g.rl_indexed_moves(policy).unwrap();
+            let m = moves[rng.gen_range(0..moves.len())].mv.clone();
+            let price = m.price.map(|r| r.lo + r.step.max(1) * rng.gen_range(0..=(r.hi - r.lo) / r.step.max(1)));
+            let m = crate::rl::generator::priced(m, price).unwrap();
+            g.rl_apply_move(&m).unwrap();
+        }
+        (!g.finished).then_some(g)
+    }
+
+    fn searched(game: BaseGame, iterations: usize, seed: u64) -> RustMCTSPlayer {
+        let mut player = RustMCTSPlayer::from_game(game, None, None, None, None).unwrap();
+        player.seed(seed);
+        player.mean_q = true;
+        player.c_puct_init = 0.05;
+        let mut rng = StdRng::seed_from_u64(seed ^ 0x5eed);
+        for _ in 0..iterations {
+            let leaf = player.select_leaf().unwrap();
+            if player.arena[leaf].is_terminal {
+                let v = crate::mcts_lockstep::terminal_value(&player.arena[leaf].game, true, 0.0, &[]);
+                player.backup(leaf, v);
+                continue;
+            }
+            let node = &player.arena[leaf];
+            let priors: Vec<f32> = node.legal_action_indices.iter().map(|_| rng.gen_range(0.01..1.0)).collect();
+            let mut value = [0.0f32; VALUE_SIZE];
+            for v in value.iter_mut().take(player.num_players) {
+                *v = rng.gen_range(0.0..1.0);
+            }
+            let by_index = node
+                .price_ranges
+                .keys()
+                .map(|&i| (i, (0..NUM_CELLS).map(|_| rng.gen_range(-2.0..2.0)).collect()))
+                .collect();
+            let pc = PriceComponents { by_index, ..Default::default() };
+            player.incorporate(leaf, priors, value, Some(pc));
+        }
+        player
+    }
+
+    /// ``game``'s position as the tree must see it: its generator moves'
+    /// indices, ``(lo, hi, step)`` and the deciding player's index.
+    fn expected_node(moves: TreeMoves, game: &mut BaseGame) -> (Vec<u32>, HashMap<u32, (i64, i64, i64)>, usize) {
+        let legal = GenLegal::generate(moves, game).unwrap();
+        let ranges = legal
+            .indices
+            .iter()
+            .enumerate()
+            .filter_map(|(pos, &i)| legal.moves.range(pos).map(|r| (i, (r.lo as i64, r.hi as i64, r.step.max(1) as i64))))
+            .collect();
+        let mut ids: Vec<u32> = game.players.iter().map(|p| p.id).collect();
+        ids.sort_unstable();
+        let decider = generator_decider_id(game).unwrap_or(ids[0]);
+        (legal.indices, ranges, ids.iter().position(|&p| p == decider).unwrap())
+    }
+
+    /// Every node of ``player``'s tree against the generator; returns the
+    /// children checked.
+    fn check_tree(player: &RustMCTSPlayer) -> usize {
+        let TreeMoves::Generator { policy, g1822, .. } = player.moves else { panic!("a generator tree") };
+        let mut checked = 0;
+        for (i, node) in player.arena.iter().enumerate() {
+            let mut game = node.game.clone_for_search();
+            if !node.is_terminal {
+                let (legal, ranges, mover) = expected_node(player.moves, &mut game);
+                assert_eq!(node.legal_action_indices, legal, "node {i}: the generator's moves");
+                let got: HashMap<u32, (i64, i64, i64)> =
+                    node.price_ranges.iter().map(|(&k, &(lo, hi))| (k, (lo, hi, node.price_steps[&k]))).collect();
+                assert_eq!(got, ranges, "node {i}: price ranges");
+                assert_eq!(node.active_player_index, mover, "node {i}: the decider");
+                if i != player.root_idx && player.root_log.len() + node.game.action_log.len() < player.max_game_length {
+                    // A child stops at a decision: several moves or an open price.
+                    let forced = legal.len() == 1 && ranges.get(&legal[0]).map_or(true, |r| r.0 == r.1);
+                    assert!(!forced, "node {i}: a forced position is a node");
+                }
+            }
+            for (&slot, prices) in &node.price_children {
+                let (lo, hi) = node.price_ranges[&slot];
+                let step = node.price_steps[&slot];
+                for &p in prices.keys() {
+                    assert!(lo <= p && p <= hi && (p - lo) % step == 0, "price {p} off [{lo}, {hi}] step {step}");
+                }
+            }
+            // The child replayed from its parent: the move by index at its price, then the forced moves.
+            let (Some(parent), Some(mv)) = (node.parent, node.fmove) else { continue };
+            let mut replay = player.arena[parent].game.clone_for_search();
+            let price = node.sampled_price.map(|p| p as i32);
+            if g1822 {
+                replay.rl_g1822_apply_index(mv, price, policy).unwrap();
+            } else {
+                replay.rl_apply_index(mv, price, policy).unwrap();
+            }
+            let mut chain = Vec::new();
+            while !replay.finished && player.root_log.len() + replay.action_log.len() < player.max_game_length {
+                let here = GenLegal::generate(player.moves, &mut replay).unwrap();
+                if !here.forced() {
+                    break;
+                }
+                chain.push(here.indices[0]);
+                if g1822 {
+                    replay.rl_g1822_apply_index(here.indices[0], None, policy).unwrap();
+                } else {
+                    replay.rl_apply_index(here.indices[0], None, policy).unwrap();
+                }
+            }
+            assert_eq!(chain, node.forced_action_chain, "node {i}: the forced chain");
+            assert_eq!(replay.action_log, node.game.action_log, "node {i}: the position");
+            checked += 1;
+        }
+        checked
+    }
+
+    #[test]
+    fn a_1867_tree_is_the_generators_game() {
+        let mut checked = 0;
+        let mut priced = 0;
+        for (players, steps, seed) in [(4, 0, 1), (4, 60, 2), (3, 250, 3), (5, 400, 4), (6, 180, 5), (4, 700, 6)] {
+            let Some(game) = walked_1867(players, steps, seed) else { continue };
+            let player = searched(game, 300, seed);
+            checked += check_tree(&player);
+            priced += player.arena.iter().map(|n| n.price_children.len()).sum::<usize>();
+        }
+        assert!(checked > 600, "checked {checked} children");
+        assert!(priced > 0, "no price grandchildren in any tree");
+    }
+
+    #[test]
+    fn the_price_head_row_proposes_prices_on_the_grid() {
+        // The opening auction: a bid on a private (an open price on the $5 grid).
+        let game = walked_1867(4, 0, 0).unwrap();
+        let mut player = RustMCTSPlayer::from_game(game, None, None, None, None).unwrap();
+        player.seed(7);
+        let root = player.root_idx;
+        let slot = *player.arena[root]
+            .legal_action_indices
+            .iter()
+            .find(|&&i| RustMCTSPlayer::is_pw_slot(&player.arena[root], i))
+            .expect("an open-price bid at the start");
+        let (lo, hi) = player.arena[root].price_ranges[&slot];
+        let step = player.arena[root].price_steps[&slot];
+        assert!(step > 1, "1867 bids step by $5");
+        // A row confident in one cell (in step units over the range).
+        let cells = PriceCells::new(&player.arena[root].action_types[&slot], 0, (hi - lo) / step, 1).unwrap();
+        let modal = (0..NUM_CELLS).filter(|&c| cells.nonempty(c)).nth(2).unwrap();
+        let mut row = vec![0.0f32; NUM_CELLS];
+        row[modal] = 12.0;
+        let pc = PriceComponents { by_index: HashMap::from([(slot, row)]), ..Default::default() };
+        let num_legal = player.arena[root].legal_action_indices.len();
+        player.incorporate(root, vec![1.0; num_legal], [0.25; VALUE_SIZE], Some(pc));
+        let child = player.maybe_add_child(root, slot, None).unwrap();
+        let price = player.arena[child].sampled_price.unwrap();
+        assert!(lo <= price && price <= hi && (price - lo) % step == 0, "{price}");
+        assert_eq!(cells.cell_of((price - lo) / step), Some(modal), "the first proposal is in the head's mode");
+        // The child is the bid at that price.
+        let bid = player.arena[child].game.action_log.first().cloned().unwrap();
+        assert_eq!(bid["price"].as_i64(), Some(price));
+        // A price off the grid snaps down onto it.
+        let off = player.maybe_add_child(root, slot, Some(lo + step + 1)).unwrap();
+        assert_eq!(player.arena[off].sampled_price, Some(lo + step));
+    }
+
+    #[test]
+    fn a_minors_home_token_is_its_opening_bidders_choice() {
+        // Walk until a stock-round home token is pending (a minor just opened for bids).
+        let mut found = 0;
+        let mut not_first = 0;
+        for seed in 0..40u64 {
+            let mut g = crate::g1867::fuzz::new_game(4);
+            let policy = g.title_def().generator_cross_player();
+            let mut rng = StdRng::seed_from_u64(seed);
+            for _ in 0..400 {
+                if g.finished {
+                    break;
+                }
+                if let crate::rounds::Round::Stock(s) = &g.round {
+                    if let Some(&(_, chooser)) = s.pending_home_tokens.first() {
+                        let player = RustMCTSPlayer::from_game(g.clone_for_search(), None, None, None, None).unwrap();
+                        let root = &player.arena[player.root_idx];
+                        assert_eq!(root.active_player_index, (chooser - 1) as usize);
+                        found += 1;
+                        not_first += usize::from(chooser != 1);
+                        break;
+                    }
+                }
+                let moves = g.rl_indexed_moves(policy).unwrap();
+                let m = moves[rng.gen_range(0..moves.len())].mv.clone();
+                g.rl_apply_move(&m).unwrap();
+            }
+        }
+        assert!(found >= 5 && not_first >= 2, "found {found} pending home tokens, {not_first} not the first player's");
+    }
+
+    #[test]
+    fn an_1822_tree_is_the_generators_game() {
+        for title in ["1822", "1822CA"] {
+            let ids: Vec<u32> = (1001..1005).collect();
+            let names: HashMap<u32, String> = ids.iter().map(|&i| (i, format!("P{i}"))).collect();
+            let game = BaseGame::build_titled(title, ids, names);
+            let player = searched(game, 120, 11);
+            assert!(check_tree(&player) > 50, "{title}");
+        }
     }
 }

@@ -8,8 +8,9 @@ the advisor's search, as the extension's autoplay runs it). The advisor searches
 time, so the connectors take turns with each other and with the extension.
 
 Games of another title the hub has a policy for (``titled``: ``main.py advisor --title-policy
-1867=<checkpoint>``, :mod:`titled`) are followed and played by that policy alone, no search, on the
-local site only; 18xx.games stays 1830-only.
+1867=<checkpoint>``, :mod:`titled`) are followed and played by that policy alone or, with ``--title-search
+1867=<critic>``, by a search of it with that critic (in the calling connector's thread), on the local site
+only; 18xx.games stays 1830-only.
 """
 
 from __future__ import annotations

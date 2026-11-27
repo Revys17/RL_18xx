@@ -1,6 +1,7 @@
 """Bot seats of titles other than 1830 (1867 today): follow the game in the Rust engine, play a title-generic
-policy's own move (no search). Only the local site's connector plays them (``main.py advisor --bots --title-policy
-1867=<checkpoint>``); the advice, the extension and 18xx.games stay 1830-only.
+policy's own move or (``--title-search``) the move a search of that policy with a title-generic critic chooses. Only
+the local site's connector plays them (``main.py advisor --bots --title-policy 1867=<checkpoint>[@T] [--title-search
+1867=<critic>[#head][@readouts][/c_puct][:options]]``); the advice, the extension and 18xx.games stay 1830-only.
 
 **Following** (:class:`TitledGame`): the site's action list is filtered as Ruby's ``Game.load`` processes it --
 undo / redo, then each kept action followed by its recorded auto actions
@@ -22,6 +23,16 @@ Ruby accepts but then cannot go on from): a MajorTrainless choice that leaves Ru
 every other player is below $5. The move goes to the site as the engine logged it, a player entity as the site's
 user id. Where the site's engine (Ruby) and ours disagree about who acts, the bot stops and says so: Ruby is the
 source of truth for rules, a disagreement is a rules difference to fix, not to paper over.
+
+**Searched moves** (``--title-search``, :class:`TitledPolicy` ``search``; ``docs/rl_model.md`` "Searching 1867"): every
+decision is searched by the Rust tree over the same legal moves (``generic_search``: the policy's priors at the run's
+``learner_temperature`` unless the spec's ``ptemp`` says otherwise, its price cells, the critic's ``#score`` head by
+default) with the 1830 bots' settings unless the spec overrides them (``generic_search.BOT_SEARCH``: mean Q, c_puct
+0.05, 8 leaves per batch, each distinct leaf once; ``BOT_READOUTS`` readouts), in-process on the bots' CPU. The move
+is the most visited one whose Ruby continuation is safe (the dead-end choice above is never played while another
+move exists); an open price is the most visited price grandchild's, and an auction bid still keeps $5 back as above.
+A position with one move and no price is played as is; one move with an open price is priced by the root's own
+evaluation (no further search).
 """
 
 from __future__ import annotations
@@ -31,6 +42,7 @@ import hashlib
 import json
 import logging
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +57,9 @@ LOGGER = logging.getLogger(__name__)
 TITLES = {"1867": (3, 6)}
 #: Action fields the site adds or numbers itself.
 SITE_FIELDS = ("id", "created_at", "user")
+#: Searched games whose tree the bots keep after their move (LRU): the next search of that game starts from the
+#: chosen move's subtree when the game is still at its root (the same bot moving again).
+KEPT_TREES = 4
 
 
 def titled_problem(game: dict) -> Optional[str]:
@@ -247,7 +262,7 @@ def describe_action(action: dict) -> str:
 class TitledPolicy:
     """A title-generic checkpoint playing one title's bot seats policy-only (module docstring)."""
 
-    def __init__(self, title: str, path, device="cpu", temperature: Optional[float] = None, seed=None):
+    def __init__(self, title: str, path, device="cpu", temperature: Optional[float] = None, seed=None, search=None):
         from rl18xx.agent.advisor.advisor import checkpoint_label, training_temperature
         from rl18xx.agent.alphazero import model_generic as mg
         from rl18xx.agent.alphazero.generic_inference import LocalGenericServer
@@ -270,6 +285,26 @@ class TitledPolicy:
         self.play = title_play(self.title)
         self.rng = np.random.default_rng(seed)
         self._lock = threading.Lock()
+        self._trees: "OrderedDict" = OrderedDict()  # game key -> GenericSearchPlayer (--title-search)
+        self.kept_trees = 0  # searches that started from a kept tree
+        # --title-search: a generic_search.SearchSpec (its ``policy`` this checkpoint), searched in-process.
+        self.search = search
+        self.evaluator = None
+        if search is not None:
+            from rl18xx.agent.alphazero.generic_search import local_evaluator
+
+            critic = None
+            if search.value:
+                value_model, value_meta = mg.load_checkpoint(search.value, device)
+                if self.title not in (value_meta.get("titles") or []):
+                    raise mg.CheckpointMismatch(
+                        f"{search.value}: not trained on {self.title} (titles {value_meta.get('titles')})"
+                    )
+                critic = LocalGenericServer(value_model.eval(), seed=seed)
+            self.evaluator = local_evaluator(self.server, critic, search.value_head)
+            value = f"generic:{checkpoint_label(search.value)}" if search.value else "own heads"
+            ptemp = search.overrides.get("prior_temperature", self.temperature)
+            self.label += f" + search {value}#{search.value_head}@{search.readouts} (prior T {ptemp:g})"
 
     # ------------------------------------------------------------------ choice
     def _ruby_safe(self, raw, legal) -> np.ndarray:
@@ -301,7 +336,7 @@ class TitledPolicy:
         passes = [j for j, w in enumerate(legal.wires) if w.get("type") == "pass"]
         return (passes[0], None) if passes else (k, price)
 
-    def choose(self, raw, legal) -> dict:
+    def choose(self, raw, legal, key=None) -> dict:
         """The move at ``raw`` among ``legal`` (``model_generic.LegalActions`` of the title's cross-player policy):
         ``{k, price, probability, kind}`` (``kind``: policy / priced / forced)."""
         from rl18xx.agent.alphazero import model_generic as mg
@@ -310,6 +345,8 @@ class TitledPolicy:
 
         if not self.play.is_decision(legal):
             return {"k": 0, "price": self.play.fixed_price(raw, legal, 0), "probability": 1.0, "kind": "forced"}
+        if self.search is not None:
+            return self._searched(raw, legal, key)
         arrays = mg.add_legal_inputs(encode_batch([raw]), [legal])
         with self._lock:
             reply = self.server.run(arrays, price_eps=0.0)
@@ -329,6 +366,55 @@ class TitledPolicy:
             "price": price,
             "probability": float(np.exp(logp[k])),
             "kind": "policy" if len(legal) > 1 else "priced",
+        }
+
+    def search_config(self, num_players: int):
+        """The tree's settings for a ``num_players`` game: the spec's, priors at this policy's temperature unless
+        the spec gives ``ptemp``, finished games backed up as the critic's run scored them."""
+        extra = {} if "prior_temperature" in self.search.overrides else {"prior_temperature": self.temperature}
+        return self.search.config(num_players, **extra)
+
+    def _searched(self, raw, legal, key=None) -> dict:
+        """:meth:`choose` with ``--title-search``: the most visited Ruby-safe move of a search from ``raw``. ``key``
+        (a site game's): its tree is kept after the move and searched on from if the game is still at its root
+        (:data:`KEPT_TREES`; the action dicts compared without the site's own fields)."""
+        from rl18xx.agent.alphazero.generic_play import price_field
+        from rl18xx.agent.alphazero.generic_search import GenericSearchPlayer, search_position
+
+        indices = [int(i) for i in legal.indices]
+        safe = self._ruby_safe(raw, legal)
+        with self._lock:
+            player = self._trees.pop(key, None) if key is not None else None
+            if player is None:
+                player = GenericSearchPlayer(self.search_config(len(raw.players)))
+            kept = player.kept
+            search_position(player, raw, self.evaluator, ignore=SITE_FIELDS)
+            self.kept_trees += player.kept - kept
+            if [int(i) for i in player.legal()] != indices:
+                raise RuntimeError("the search tree's legal moves are not the policy's")
+            index = player.pick_move(allowed={i for i, ok in zip(indices, safe) if ok})
+            visits = player.visits()
+            readouts = float(player.tree.n_at_root())
+            actions = player.play(index)
+            if key is not None:
+                self._trees[key] = player
+                while len(self._trees) > KEPT_TREES:
+                    self._trees.popitem(last=False)
+        k = indices.index(index)
+        if self.play.open_price(legal, k):
+            price = int(actions[0][price_field(actions[0])])
+        else:
+            price = self.play.fixed_price(raw, legal, k)
+        chosen, price = self._keep_back(raw, legal, k, price)
+        if chosen != k:
+            k, price = chosen, self.play.fixed_price(raw, legal, chosen)
+        total = sum(visits.values())
+        return {
+            "k": k,
+            "price": price,
+            "probability": float(visits.get(indices[k], 0.0) / total) if total > 0 else 1.0,
+            "kind": "search" if len(legal) > 1 else "priced",
+            "visits": int(readouts),
         }
 
     # -------------------------------------------------------------------- move
@@ -372,7 +458,7 @@ class TitledPolicy:
             raise AutoplayError(
                 f"Our engine has no legal move for {live.describe_entity(*engine)} ({site.step or '?'})."
             )
-        choice = self.choose(raw, legal)
+        choice = self.choose(raw, legal, key=(live.game_id, live.seed))
         after = raw.pickle_clone()
         before = len(raw.raw_actions)
         self.play.apply(after, legal, choice["k"], choice["price"])
@@ -387,8 +473,10 @@ class TitledPolicy:
             "action": to_site_action(action, live),
             "index": int(legal.indices[choice["k"]]),
             "num_legal": len(legal),
-            "share": choice["probability"],  # the policy's probability of the move (temperature 1)
+            # the policy's probability of the move (temperature 1); a searched move: its share of the root's visits
+            "share": choice["probability"],
             "temperature": self.temperature,
+            **({"visits": choice["visits"]} if "visits" in choice else {}),
             "seat": seat,
             "player": live.names[seat],
             "actor": actor,

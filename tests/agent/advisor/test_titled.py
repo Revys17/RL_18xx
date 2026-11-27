@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from rl18xx.agent.advisor.app import parse_title_policy
+from rl18xx.agent.advisor.app import load_title_policies, parse_title_policy, parse_title_search
 from rl18xx.agent.advisor.autoplay import AutoplayError, SiteView
 from rl18xx.agent.advisor.bot_hub import LOCAL, PUBLIC, BotHub, CannotMove
 from rl18xx.agent.advisor.live_game import support_problem
@@ -46,6 +46,23 @@ def policy(tmp_path_factory) -> TitledPolicy:
     path = run / "learner" / "1.pth"
     mg.save_checkpoint(model, path, titles=["1867"])
     return TitledPolicy("1867", path, seed=0)
+
+
+@pytest.fixture(scope="module")
+def searched_policy(policy) -> TitledPolicy:
+    """``policy``'s checkpoint searched (``--title-search``, 16 readouts) with a tiny untrained critic beside it."""
+    from rl18xx.agent.alphazero import model_generic as mg
+
+    critic = Path(policy.path).parent.parent / "critic" / "1.pth"
+    torch.manual_seed(4)
+    model = mg.GenericPolicyValueModel(mg.GenericModelConfig(**GENERIC_SMALL)).eval()
+    with torch.no_grad():
+        for p in model.parameters():
+            if p.abs().sum() == 0:
+                p.normal_(0, 0.1)
+    mg.save_checkpoint(model, critic, titles=["1867"])
+    _, search = parse_title_search(f"1867=generic:{critic}@16", policy.path)
+    return TitledPolicy("1867", policy.path, seed=0, search=search)
 
 
 def active(game: dict, count: int) -> dict:
@@ -118,6 +135,45 @@ def test_an_action_the_engine_refuses_stops_the_replay_before_it(site_game, poli
 
 @pytest.mark.parametrize("count", [0, 20, HOME_TOKEN_AT, 77, 100, 150, 200])
 def test_the_bots_move_is_legal_and_the_site_game_feeds_it_back(site_game, policy, count):
+    check_move(site_game, policy, count)
+
+
+@pytest.mark.parametrize("count", [0, 20, HOME_TOKEN_AT, 100, 150])
+def test_the_searched_bots_move_is_legal_and_the_site_game_feeds_it_back(site_game, searched_policy, count):
+    result = check_move(site_game, searched_policy, count)
+    assert result["kind"] in ("search", "priced", "forced")
+    if result["kind"] == "search":
+        assert result["visits"] >= 17 and 0.0 < result["share"] <= 1.0  # the root's expansion + 16 readouts
+    assert "search" in searched_policy.label and "#score@16" in searched_policy.label
+
+
+def test_the_searched_bot_keeps_its_tree_for_its_next_move(site_game, searched_policy):
+    """After a searched move the site serves back (numbered, as the bot's user), the same bot moving again
+    searches on from the kept subtree."""
+    kept = searched_policy.kept_trees
+    for count in range(120, 220, 7):
+        game = active(site_game, count)
+        live = TitledGame(game)
+        if live.acting() is None or live.acting()[0] != "corporation" or live.raw.round.round_type != "Operating":
+            continue
+        for _ in range(3):
+            view = ruby_view(live, game)
+            result = searched_policy.move(live, SiteView.parse(view), range(1, 5))
+            stored = {**result["action"], "id": game["actions"][-1]["id"] + 1, "user": view["entity"]["player"]}
+            game = copy.deepcopy(game)
+            game["actions"].append(stored)
+            before = live.acting()
+            assert live.update(game) and live.error is None
+            if live.finished or live.acting() != before:
+                break
+        if searched_policy.kept_trees > kept:
+            return
+    raise AssertionError("no searched move kept its tree for the same bot's next move")
+
+
+def check_move(site_game, policy, count) -> dict:
+    """``policy``'s move ``count`` actions into the fixture game: legal, in the site's format, and replayed by the
+    follower once the site serves it back."""
     game = active(site_game, count)
     live = TitledGame(game)
     if count == HOME_TOKEN_AT:  # Ruby's HomeToken view: the Stock Round's player (no actions of its own)
@@ -148,6 +204,7 @@ def test_the_bots_move_is_legal_and_the_site_game_feeds_it_back(site_game, polic
         **action,
         **({"entity": live.player_mapping[action["entity"]]} if action["entity_type"] == "player" else {}),
     }
+    return result
 
 
 def test_the_bot_stops_where_the_engines_disagree_or_its_seat_isnt_a_bot(site_game, policy):
@@ -216,6 +273,34 @@ def test_1867_bots_play_on_the_local_site_only(hub, site_game):
     live = TitledGame(game)
     with pytest.raises(CannotMove, match="local site only"):
         hub.search_move(PUBLIC, game, ruby_view(live, game), {p["id"] for p in game["players"]}, 8)
+
+
+def test_title_search_specs(policy):
+    from argparse import Namespace
+
+    from rl18xx.agent.alphazero.generic_search import BOT_READOUTS, BOT_SEARCH
+
+    critic = Path(policy.path).parent.parent / "critic" / "1.pth"
+    if not critic.exists():
+        critic.parent.mkdir(parents=True, exist_ok=True)
+        critic.write_bytes(Path(policy.path).read_bytes())
+    title, search = parse_title_search(f"1867=generic:{critic}", policy.path)
+    assert title == "1867" and (search.policy, search.value, search.value_head) == (policy.path, str(critic), "score")
+    assert search.readouts == BOT_READOUTS and all(search.overrides[k] == v for k, v in BOT_SEARCH.items())
+    _, search = parse_title_search(f"1867={critic}#win@200/0.1:par=4,ptemp=1.0", policy.path)
+    assert search.value_head == "win" and search.readouts == 200
+    assert search.overrides["c_puct_init"] == 0.1 and search.overrides["parallel_readouts"] == 4
+    assert search.overrides["prior_temperature"] == 1.0 and search.overrides["mcts_mean_q"]
+    assert parse_title_search("1867=self@64", policy.path)[1].value is None
+    with pytest.raises(ValueError):
+        parse_title_search(f"1867={critic}:sample=0.5", policy.path)
+    with pytest.raises(ValueError, match="no --title-policy"):
+        load_title_policies(Namespace(title_policy=[], title_search=[f"1867={critic}"]), "cpu")
+    loaded = load_title_policies(
+        Namespace(title_policy=[f"1867=generic:{policy.path}@0.5"], title_search=[f"1867=generic:{critic}@32"]), "cpu"
+    )
+    assert loaded["1867"].search.readouts == 32 and loaded["1867"].search_config(5).prior_temperature == 0.5
+    assert len(loaded["1867"].search_config(5).terminal_score_points) in (0, 5)
 
 
 def test_title_policy_specs():

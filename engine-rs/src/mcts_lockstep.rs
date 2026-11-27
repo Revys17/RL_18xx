@@ -330,6 +330,11 @@ pub fn mcts_collect_leaves<'py>(
     let mut title = String::from("1830");
     for (k, tree) in trees.iter().enumerate() {
         let mut tree = tree.borrow_mut();
+        if tree.moves.is_generator() {
+            return Err(PyValueError::new_err(
+                "mcts_collect_leaves: a generator title's tree has no legacy encoding (mcts_collect_leaf_games)",
+            ));
+        }
         terminal.push(tree.collect_pending(max_leaves[k], dedupe[k], use_score_values[k])? as i64);
         counts.push(tree.pending.len() as i64);
         let tree = &mut *tree;
@@ -380,7 +385,10 @@ pub fn mcts_collect_leaves<'py>(
 /// takes values in the frame where that player is seat 0), ``num_players``,
 /// ``counts``, ``terminal``, ``legal`` and ``legal_lengths`` as
 /// ``mcts_collect_leaves``. Each tree keeps its leaves pending until
-/// ``mcts_apply_results``.
+/// ``mcts_apply_results``. Trees of a generator title (1867, the 1822 family)
+/// also give ``price_ranges`` (N, 3) int64: each legal move's ``(lo, hi,
+/// step)``, -1 for a move without a price -- what ``model_generic.legal_actions``
+/// reads from ``rl_legal_moves_json``, without generating the moves again.
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (trees, max_leaves, dedupe, use_score_values))]
@@ -404,6 +412,8 @@ pub fn mcts_collect_leaf_games<'py>(
     let mut rotations: Vec<i64> = Vec::new();
     let mut games: Vec<PyObject> = Vec::new();
     let mut num_players: Option<usize> = None;
+    let mut generator: Option<bool> = None;
+    let mut price_ranges: Vec<i64> = Vec::new();
     for (k, tree) in trees.iter().enumerate() {
         let mut tree = tree.borrow_mut();
         terminal.push(tree.collect_pending(max_leaves[k], dedupe[k], use_score_values[k])? as i64);
@@ -412,15 +422,33 @@ pub fn mcts_collect_leaf_games<'py>(
         if *num_players.get_or_insert(np) != np {
             return Err(PyValueError::new_err("mcts_collect_leaf_games: one player count per call"));
         }
+        let gen = tree.moves.is_generator();
+        if *generator.get_or_insert(gen) != gen {
+            return Err(PyValueError::new_err("mcts_collect_leaf_games: one kind of title layout per call"));
+        }
         for &(idx, rotation) in tree.pending.iter() {
             let node = &tree.arena[idx];
             games.push(Py::new(py, node.game.clone_for_search_without_log())?.into_any());
             rotations.push(rotation as i64);
             legal.extend(node.legal_action_indices.iter().map(|&i| i as i32));
             legal_lengths.push(node.legal_action_indices.len() as i64);
+            if gen {
+                for i in &node.legal_action_indices {
+                    match node.price_ranges.get(i) {
+                        Some(&(lo, hi)) => {
+                            price_ranges.extend([lo, hi, node.price_steps.get(i).copied().unwrap_or(1)]);
+                        }
+                        None => price_ranges.extend([-1, -1, -1]),
+                    }
+                }
+            }
         }
     }
     let d = PyDict::new(py);
+    if generator == Some(true) {
+        let n = price_ranges.len() / 3;
+        d.set_item("price_ranges", PyArray1::from_vec(py, price_ranges).reshape([n, 3])?)?;
+    }
     d.set_item("games", games)?;
     d.set_item("rotations", PyArray1::from_vec(py, rotations))?;
     d.set_item("num_players", num_players.unwrap_or(0))?;
@@ -464,11 +492,16 @@ pub fn encode_games<'py>(
 /// canonical frame; ``prior_temperature[t]``: tree ``t``'s
 /// ``prior_temperature``; ``price_logits`` (B, slots, cells) or (B, slots *
 /// cells) and ``slot_index``: the price head's rows and slot layout, if the
-/// model has one.
+/// model has one. A generator title's trees take their price rows per legal
+/// move instead: ``price_rows`` (P,) int64, positions in the flat legal list
+/// (``priors``' order, ascending), and ``price_row_logits`` (P, NUM_CELLS)
+/// float32, each such move's cell log-probabilities
+/// (``PriceComponents::by_index``).
 #[cfg(feature = "python")]
 #[cfg(feature = "python")]
 #[pyfunction]
-#[pyo3(signature = (trees, priors, values, prior_temperature, price_logits=None, slot_index=None))]
+#[pyo3(signature = (trees, priors, values, prior_temperature, price_logits=None, slot_index=None, price_rows=None, price_row_logits=None))]
+#[allow(clippy::too_many_arguments)]
 pub fn mcts_apply_results<'py>(
     trees: Vec<Bound<'py, RustMCTSPlayer>>,
     priors: PyReadonlyArray1<'py, f32>,
@@ -476,6 +509,8 @@ pub fn mcts_apply_results<'py>(
     prior_temperature: Vec<f32>,
     price_logits: Option<PyReadonlyArrayDyn<'py, f32>>,
     slot_index: Option<Bound<'py, PyAny>>,
+    price_rows: Option<PyReadonlyArray1<'py, i64>>,
+    price_row_logits: Option<PyReadonlyArray2<'py, f32>>,
 ) -> PyResult<()> {
     if prior_temperature.len() != trees.len() {
         return Err(PyValueError::new_err("mcts_apply_results: one prior_temperature per tree"));
@@ -508,6 +543,27 @@ pub fn mcts_apply_results<'py>(
         }
         _ => None,
     };
+
+    // Per-move price rows (generator titles): positions in the flat legal list.
+    let row_prices = match (&price_rows, &price_row_logits) {
+        (Some(positions), Some(logits)) => {
+            let positions = positions.as_slice()?;
+            let shape = logits.shape().to_vec();
+            if shape.len() != 2 || shape[0] != positions.len() || shape[1] != NUM_CELLS {
+                return Err(PyValueError::new_err(format!(
+                    "price_row_logits must be ({}, {NUM_CELLS}), got {shape:?}",
+                    positions.len()
+                )));
+            }
+            if positions.windows(2).any(|w| w[0] >= w[1]) {
+                return Err(PyValueError::new_err("price_rows must be ascending"));
+            }
+            Some((positions, logits.as_slice()?))
+        }
+        (None, None) => None,
+        _ => return Err(PyValueError::new_err("price_rows and price_row_logits go together")),
+    };
+    let mut next_price_row = 0usize;
 
     let mut row = 0usize;
     let mut offset = 0usize;
@@ -542,11 +598,26 @@ pub fn mcts_apply_results<'py>(
                     value[i] = v[(i + np - rotation % np) % np];
                 }
             }
-            let pc = price.as_ref().map(|(flat, width, index)| PriceComponents {
+            let mut pc = price.as_ref().map(|(flat, width, index)| PriceComponents {
                 price_logits: flat[row * width..(row + 1) * width].to_vec(),
                 slot_index: Arc::clone(index),
                 num_slots: width / NUM_CELLS,
+                by_index: HashMap::new(),
             });
+            if let Some((positions, logits)) = row_prices {
+                let start = offset - n_legal;
+                let mut by_index: HashMap<u32, Vec<f32>> = HashMap::new();
+                while next_price_row < positions.len() && (positions[next_price_row] as usize) < offset {
+                    let pos = positions[next_price_row] as usize;
+                    if pos < start {
+                        return Err(PyValueError::new_err("price_rows: a position before its leaf's legal moves"));
+                    }
+                    let index = tree.arena[idx].legal_action_indices[pos - start];
+                    by_index.insert(index, logits[next_price_row * NUM_CELLS..(next_price_row + 1) * NUM_CELLS].to_vec());
+                    next_price_row += 1;
+                }
+                pc.get_or_insert_with(PriceComponents::default).by_index = by_index;
+            }
             tree.incorporate(idx, legal_probs, value, pc);
             row += 1;
         }
@@ -556,6 +627,11 @@ pub fn mcts_apply_results<'py>(
             "mcts_apply_results: {} priors for {offset} legal moves",
             priors.len()
         )));
+    }
+    if let Some((positions, _)) = row_prices {
+        if next_price_row != positions.len() {
+            return Err(PyValueError::new_err("mcts_apply_results: price_rows past the leaves' legal moves"));
+        }
     }
     Ok(())
 }
@@ -573,6 +649,16 @@ pub fn mcts_terminal_value(
     score_points: Option<Vec<f32>>,
 ) -> Vec<f32> {
     terminal_value(&game, use_score_values, score_weight, &score_points.unwrap_or_default()).to_vec()
+}
+
+/// The player id who decides ``game``'s position as a generator title's
+/// search tree reads it (``mcts::generator_decider_id``: the encoder's mover,
+/// except 1867's stock-round home token, chosen by the opening bidder); None
+/// when the game is over. For the evals' and bots' seat of a decision.
+#[cfg(feature = "python")]
+#[pyfunction]
+pub fn mcts_decider_id(game: PyRef<'_, BaseGame>) -> Option<u32> {
+    crate::mcts::generator_decider_id(&game)
 }
 
 /// Forget the trees' pending batches without applying them (virtual losses

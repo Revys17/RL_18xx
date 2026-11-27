@@ -339,17 +339,46 @@ def parse_title_policy(spec: str) -> tuple:
     return title, path, float(temperature) if temperature else None
 
 
+def parse_title_search(spec: str, policy: str):
+    """``(title, generic_search.SearchSpec)`` of ``--title-search <title>=[generic:]<critic>[#<head>][@<readouts>]
+    [/<c_puct_init>][:<option>,...]`` searching ``policy`` (the title's ``--title-policy`` checkpoint): the 1830 bots'
+    settings (``generic_search.BOT_SEARCH``) and ``BOT_READOUTS`` readouts unless given, the critic's ``score`` head
+    unless ``#win`` / ``#blend=<w>``; ``self`` for the policy network's own value heads."""
+    from rl18xx.agent.alphazero.generic_search import BOT_READOUTS, BOT_SEARCH, parse_search_spec
+
+    title, sep, rest = str(spec).partition("=")
+    if not sep or not title or not rest:
+        raise ValueError(f"--title-search {spec!r}: <title>=<critic>[#<head>][@<readouts>][/<c_puct>][:<options>]")
+    search = parse_search_spec(rest, default_readouts=BOT_READOUTS, default_head="score", policy=policy)
+    if search.policy_only:
+        raise ValueError(f"--title-search {spec!r}: sample=<t> is --title-policy's play (no search)")
+    search.overrides = {**BOT_SEARCH, **search.overrides}
+    return title, search
+
+
 def load_title_policies(args, device: str) -> dict:
-    """``--title-policy`` -> {title: ``titled.TitledPolicy``}: the bots' policies for titles other than 1830."""
+    """``--title-policy`` (and ``--title-search``) -> {title: ``titled.TitledPolicy``}: the bots' policies for titles
+    other than 1830, each searched with its title's ``--title-search`` critic when one is given."""
     from rl18xx.agent.advisor.titled import TitledPolicy
 
-    policies = {}
+    specs = {}
     for spec in getattr(args, "title_policy", None) or []:
         title, path, temperature = parse_title_policy(spec)
-        if title in policies:
+        if title in specs:
             raise ValueError(f"--title-policy: {title} given twice")
-        policies[title] = TitledPolicy(title, path, device=device, temperature=temperature)
-    return policies
+        specs[title] = (path, temperature)
+    searches = {}
+    for spec in getattr(args, "title_search", None) or []:
+        title = str(spec).partition("=")[0]
+        if title not in specs:
+            raise ValueError(f"--title-search {spec!r}: no --title-policy for {title}")
+        if title in searches:
+            raise ValueError(f"--title-search: {title} given twice")
+        searches[title] = parse_title_search(spec, specs[title][0])[1]
+    return {
+        title: TitledPolicy(title, path, device=device, temperature=temperature, search=searches.get(title))
+        for title, (path, temperature) in specs.items()
+    }
 
 
 def run(args) -> None:
@@ -364,7 +393,9 @@ def run(args) -> None:
     title_policies = load_title_policies(args, device)
     for title, policy in title_policies.items():
         labels[f"play_{title}"] = policy.label  # shown by /api/health and the admin page
-        LOGGER.info("The bots play %s seats with %s (policy only, no search)", title, policy.label)
+        LOGGER.info(
+            "The bots play %s seats with %s (%s)", title, policy.label, "searched" if policy.search else "policy only"
+        )
     LOGGER.info(
         "The model plays seats with %s + value %s (%s head; private auction: %s + %s; mode %s; prior T %s)",
         labels["play_policy"],

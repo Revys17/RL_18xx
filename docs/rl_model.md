@@ -2471,7 +2471,9 @@ apply|rollback rl18xx-bot-backend[-next]` (the old command lines read from `/pro
    `Advisor._analyse` / `_run_values` on `GameNetwork.evaluate` (small) and a decision on which checkpoint advises.
 4. **1867 / 1822** play needs the advisor's live game to follow those titles (`live_game.SUPPORTED_TITLE` is 1830),
    their legal moves from `rl_legal_moves_json` instead of the 1830 layout, and no legacy price slots: the policy-only
-   mode is the natural first step there (`generic_policy.sample_price` already prices generator layouts).
+   mode is the natural first step there (`generic_policy.sample_price` already prices generator layouts). Done for
+   1867's bot seats (`titled.py`, policy-only since 2026-11-25; searched with `--title-search` since 2026-11-27:
+   "Searching 1867" below).
 
 ### Head-to-head evals of generic searches (`eval_head_to_head.py`, 2026-11-15)
 
@@ -2537,6 +2539,136 @@ min, every game to its decision cap, scores and summaries as for legacy matches.
 **On the GPU**: the generic servers have run only on the CPU so far (the generic PG's GPU path isn't launched either:
 TF32, pinned staged replies); generic checkpoints must match the deployment's layouts (`CheckpointMismatch`
 otherwise); one server process per generic checkpoint per replica (`--server-replicas` applies to every server).
+
+## Searching 1867 (generator titles, 2026-11-27)
+
+Code: `engine-rs/src/mcts.rs` (`TreeMoves::Generator`, `generator_decider_id`), `engine-rs/src/mcts_lockstep.rs`
+(`mcts_collect_leaf_games`' `price_ranges`, `mcts_apply_results`' `price_rows` / `price_row_logits`,
+`mcts_decider_id`), `rl18xx/agent/alphazero/generic_search.py`, `lockstep.py` (`GenericEvaluator`, `to_tree_frames`),
+`scripts/eval_generic.py` (searched sides), `rl18xx/agent/advisor/titled.py` + `app.py` (`--title-search`); tests:
+`engine-rs/src/mcts.rs` `generator_tests`, `tests/agent/alphazero/test_generic_search_1867.py`,
+`tests/agent/advisor/test_titled.py`.
+
+A title-generic policy (priors, price cells) and a title-generic critic (values) searched by the same Rust tree as
+1830's -- mean Q with first-play urgency, price grandchildren by progressive widening, `dedupe_leaves`,
+`prior_temperature`, forced-move collapsing, tree reuse, the Gumbel root, lockstep batching on generic inference
+servers. 1830's path is unchanged (its tree is `TreeMoves::Factored`, every branch below is the generator one).
+
+* **Moves**: a tree on a generator title's game (`rl_layout_kind() == Generator`: 1867, the 1822 family) takes each
+  node's legal moves from the title's generator under the title's own cross-player policy (RESTRICTED: what the PG
+  runs trained on, `model_generic.legal_actions(raw)`), indexed in the title's RL layout (`rl_indexed_moves`, ascending
+  as the policy's legal list). A node keeps its generated moves, so a child applies its move without generating the
+  parent's again (`rl_apply_move_of`: the move's action dict is logged, as `rl_apply_index`). Forced moves (one legal
+  move, no price left to choose) collapse into the edge as for 1830; **a single move whose price is still open is a
+  decision node** (`TitlePlay.is_decision`), not part of a forced chain -- the parent has no price row for it.
+* **Prices**: a priced move's legal prices are `lo + step * k <= hi` (1867 bids: $5 steps). The tree's cells are the
+  generic price head's: the move's price kind's `price_pmf` cell type over `[0, (hi - lo) / step]` in step units
+  (`rl::generator::price_cells`, Python's `RangePriceCells(grid=True)`), and each leaf's rows arrive per legal index
+  (`PriceComponents::by_index`, from the policy's `price_logp`), not through the legacy head's slots. Proposals, the
+  exploration floor and PUCT over price grandchildren are 1830's; a given price snaps down onto the grid.
+* **Values**: the generic heads are in the encoder's frame (seat 0 = the encoder's mover, `meta[5]` its index in
+  `BaseGame.players`); `to_tree_frames` maps each leaf's row through the player ids into the tree's frame (players
+  sorted by id, rotated to the node's decider), which `mcts_apply_results` unrotates to absolute order -- also when
+  the seating order differs from the id order (the 1822 family reorders players). `#score` reads the critic's
+  placement-score head; a finished game backs up placement points by net worth when the critic's run trained a
+  placement reward (`composite_model.terminal_utility`, the game's own player count).
+* **Who decides** (whose value a node backs up): the encoder's mover (`rl_mover_id`: 1867's
+  `acting_player_id_pub`, a corporation's turn its president; the 1822 family's active step entity's), **except
+  1867's stock-round home token**. With `HOME_TOKEN_TIMING = :par` a minor's home city is chosen by its opening bidder
+  before the minor has an owner, and the encoder names nobody there: seat 0, the first player. The tree uses the
+  chooser recorded with the pending token (`generator_decider_id`, `engine_rs.mcts_decider_id`). Checked at every
+  position of the 1867 fixture games (2,212 positions, all step kinds the fixtures reach, 62 home tokens: before the
+  fix 41 of them were attributed to the first player) and on random walks (`generator_tests`). **Training note, not
+  changed here**: the generic encoder and `generic_pg.mover_seat` read the same fallback, so the 1867 PG runs played
+  and credited each minor's home-token choice as the first player's, whoever bid (`eval_generic.py` did too until
+  now: it gives the decision to the decider's side).
+* **Lockstep**: `mcts_collect_leaf_games` returns each generator leaf's `price_ranges` (`(lo, hi, step)` per legal
+  move), so `GenericEvaluator` builds the leaves' legal inputs without generating the moves again
+  (`model_generic.legal_actions_with_ranges`); its reply for a generator title carries `price_rows` /
+  `price_row_logits` (positions in the flat legal list) and the seating order (`seat_ids`) instead of legacy slot rows.
+* **Players**: `generic_search.GenericSearchPlayer` (one tree; `follow(raw)` keeps it while its root is the game's
+  position, `start_search` -> `lockstep.TreeSearch`, `pick_move` (most visited; `allowed=` for the bots' Ruby dead
+  ends), `play(index)` -> the logged action dicts: the move at the most visited price, then the forced moves).
+  `parse_search_spec` reads `eval_head_to_head.py`'s player grammar.
+
+### Evals: searched vs policy-only (`scripts/eval_generic.py`)
+
+A side in `eval_head_to_head.py`'s grammar (a `+`, `#` or `:` part) is searched; `<ckpt>[@T]` stays the policy alone.
+Seat arrangements, starts, scoring and summaries are `eval_generic.py`'s; searched decisions of a worker's games run in
+lockstep (`--games-per-task` games each), on one generic server per checkpoint of a searched side with `--server`.
+The searched side plays the most visited move (`--softpick N`: visit-sampled for its first N decisions per game).
+The run's GPU commands (u2000, 4 players; `R=model_checkpoints_generic_pg/gpg1867_a4_20261122`):
+
+```bash
+S="generic:$R/learner/2000.pth+generic:$R/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5"
+uv run python scripts/eval_generic.py --title 1867 --num-players 4 --a-seats 2 --games 240 --server \
+  --workers 32 --games-per-task 8 --match "$S" "$R/learner/2000.pth@0.5" --out logs/eval/g1867_search_u2000_2v2
+uv run python scripts/eval_generic.py --title 1867 --num-players 4 --a-seats 1 --games 240 --server \
+  --workers 32 --games-per-task 8 --match "$S" "$R/learner/2000.pth@0.5" --out logs/eval/g1867_search_u2000_1v3
+```
+
+`ptemp=0.5` = the run's `learner_temperature` (the priors are the policy the run evaluated); the bots' 1830 finding
+(priors at T 1.0 searched better than gen6's own 0.5) is a variant to try (`ptemp=1.0`). Cost (estimate, no GPU
+measured): a 4-player human game has ~570 decisions (the fixtures), so a 2v2 game searches ~285 of them at ~405 leaf
+evaluations each, two forwards per leaf; at the 1830 generic estimate (~0.19 ms of GPU per leaf for both forwards,
+"Head-to-head evals of generic searches") 240 2v2 games are ~1.5 GPU-hours, 240 1v3 games ~0.75 h. The summary
+prints only at the end of a match.
+
+CPU dry run (2026-11-27, tiny untrained 1867 networks, `--auction-start --max-decisions 80`): 6 2v2 games in-process
+(2 workers x 3 games) in 10 s and 4 1v3 games on spawned generic servers in 11 s, every game to its decision cap, the
+searched side's decisions all searched (`search` in each record: decisions, kept trees).
+
+### Bots: `--title-search`
+
+```bash
+main.py advisor --bots ... --title-policy 1867=<learner.pth>@0.5 --title-search 1867=<critic.pth>
+```
+
+`--title-search TITLE=[generic:]<critic>[#score|#win|#blend=<w>][@<readouts>][/<c_puct>][:<options>]` (one per
+title; needs the title's `--title-policy`, whose checkpoint is the searched policy): defaults the 1830 bots' settings
+(`generic_search.BOT_SEARCH`: mean Q, c_puct 0.05, 8 leaves per batch, dedupe) at 400 readouts on the critic's score
+head, priors at `--title-policy`'s T unless `:ptemp=`; `self` instead of a critic searches with the policy's own value
+heads. Each decision is searched in-process on the service's CPU (the connector thread waits for it: ~4 s at 400
+readouts with 4 torch threads, table below); the tree is kept after the bot's move (the 4 most recent games) and
+searched on when the site's game comes back at its root (the same bot moving again; action dicts compared without the
+site's `id` / `user` / `created_at`), adding the readouts to the inherited visits as the eval's searched side does. The
+move is the most visited Ruby-safe move (the MajorTrainless dead end is never played while another move exists), an
+open price the most visited price grandchild's, and the auction keep-back applies as before. `/api/health` and the
+admin page show the label (`generic:<run>/learner/<u>@0.5 + search generic:<run>/critic/<u>#score@400 (prior T
+0.5)`); a move result's `kind` is `search` with `share` = the move's share of the root visits and `visits`.
+
+### Cost per searched move (CPU)
+
+`scripts/bench_generic_search.py` (2026-11-27): gpg1867_a4 u2000's learner + critic (8.6M parameters each), the bots'
+settings (`BOT_SEARCH`, `#score`, prior T 0.5), a fresh tree, in-process on the CPU, at the first decision of each kind
+after action 90 of the fixture game `tests/fixtures/1867/hs_ahjzadkh_19792.json` (4 players); cores 24-31,56-63 at nice
+19 with the 1822 GPU run on the machine (load 27-50), best of two runs (one at 1 thread):
+
+| position | legal moves | 200 readouts, 4 threads | 400 readouts, 4 threads | 400 readouts, 1 thread |
+|---|---|---|---|---|
+| operating round, a track lay (action 90) | 7 | 2.2 s | 4.7 s | 10.4 s |
+| operating round, a train purchase (98) | 2 | 2.0 s | 4.0 s | 9.4 s |
+| stock round (112) | 4 | 1.8 s | 3.5 s | 8.1 s |
+| merger round (207) | 2 | 1.8 s | 3.4 s | 7.8 s |
+
+A 400-readout search is ~52 lockstep rounds of 8 leaves, ~405 leaf evaluations; ~98% of it is the two forwards per
+round (the policy with its legal rows, then the critic): the tree and the inputs take ~0.2 s (~0.5 ms per leaf), so on
+a GPU the network is the whole cost. The policy-only bot move is one forward (~15 ms).
+
+```bash
+R=model_checkpoints_generic_pg/gpg1867_a4_20261122
+CUDA_VISIBLE_DEVICES= taskset -c 24-31,56-63 nice -19 uv run python scripts/bench_generic_search.py \
+  --learner $R/learner/2000.pth --critic $R/critic/2000.pth --threads 4 --readouts 200 400
+```
+
+### Not done
+
+* A kept tree is used only when the game is exactly at its root: moves by other seats (or Ruby's auto actions that
+  differ from our forced moves) start a fresh tree; the 1830 autoplay instead walks its tree down the moves played.
+* The 1822 family's trees build and search (`an_1822_tree_is_the_generators_game`), but its decider
+  (`g1822_acting_player`) is not checked against the moves' entities as 1867's is, and no 1822 eval was run.
+* A move the engine refuses inside a search (a generator bug) fails the worker's searches; `eval_generic.py`'s
+  policy-only sides end such a game as `rejected_move`.
 
 ## Robustness mechanisms (2026-11-15: arms A1-A3 of `docs/robustness_test_plan.md`, NOT LAUNCHED)
 

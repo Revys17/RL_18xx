@@ -67,6 +67,14 @@ class EvalResult:
     # ``rotations[b]`` of the seating order first; the searcher moves leaves' values into their tree's frame.
     # None: the tree's own canonical frame (the legacy encoder's).
     rotations: Optional[np.ndarray] = None
+    # With ``rotations``: each state's seating order (player ids, ``BaseGame.players``) when it may differ from
+    # the players sorted by id (the tree's order; generator titles -- the 1822 family reorders its players).
+    seat_ids: Optional[list] = None
+    # A generator title's price outputs (1867, the 1822 family): per priced legal row, its position in the flat
+    # legal list (``priors``' order, ascending) and its NUM_CELLS cell log-probabilities, in step units over the
+    # move's own range -- not the legacy price head's slots (``price_logits`` / ``slot_index`` stay None).
+    price_rows: Optional[np.ndarray] = None
+    price_row_logits: Optional[np.ndarray] = None
 
 
 class ClientEvaluator:
@@ -169,10 +177,18 @@ class GenericEvaluator:
         self.compress = compress
         self.states = 0
 
-    def send_games(self, games: list, legal: list):
+    def send_games(self, games: list, legal: list, price_ranges: Optional[list] = None):
+        """``price_ranges``: per position its legal moves' ``(lo, hi, step)`` rows when known (a generator
+        title's search leaves: ``mcts_collect_leaf_games``'s ``price_ranges``), else None -- then
+        ``model_generic.legal_actions`` reads them from the engine."""
         from rl18xx.agent.alphazero import model_generic as mg
 
-        legal_actions = [mg.legal_actions(g, ix) for g, ix in zip(games, legal)]
+        if price_ranges is None:
+            price_ranges = [None] * len(games)
+        legal_actions = [
+            mg.legal_actions(g, ix) if r is None else mg.legal_actions_with_ranges(g, ix, r)
+            for g, ix, r in zip(games, legal, price_ranges)
+        ]
         arrays = mg.build_inputs(games, legal_actions, dedupe_maps=True)
         sent = self.policy_client.send_inputs(arrays, want_price_logp=True, compress=self.compress)
         critic = None if self.value_client is None else self.value_client.send_inputs(arrays, compress=self.compress)
@@ -192,6 +208,21 @@ class GenericEvaluator:
             values = score
         else:
             values = (1.0 - self.blend) * win + self.blend * score
+        if games and getattr(legal_actions[0], "price_grid", False):
+            # A generator title (1867, the 1822 family): price rows per legal move, no legacy slots.
+            empty = np.zeros((0, price_pmf.NUM_CELLS), dtype=np.float32)
+            return EvalResult(
+                priors=np.exp(np.asarray(reply.logp, dtype=np.float64)).astype(np.float32),
+                values=np.ascontiguousarray(values, dtype=np.float32),
+                rotations=np.asarray(arrays["meta"][:, 5], dtype=np.int64),
+                seat_ids=[[int(p.id) for p in getattr(g, "_game", g).players] for g in games],
+                price_rows=np.asarray(arrays["price_rows"], dtype=np.int64),
+                price_row_logits=(
+                    np.ascontiguousarray(reply.price_logp, dtype=np.float32)
+                    if reply.price_logp is not None and len(arrays["price_rows"])
+                    else empty
+                ),
+            )
         prices = np.zeros((len(games), price_pmf.NUM_SLOTS, price_pmf.NUM_CELLS), dtype=np.float32)
         if reply.price_logp is not None and len(arrays["price_rows"]):
             offsets, positions = arrays["legal_offsets"], arrays["legal_pos"]
@@ -209,11 +240,34 @@ class GenericEvaluator:
         )
 
 
-def to_tree_frames(values: np.ndarray, rotations: np.ndarray, tree_rotations: np.ndarray, num_players: int):
+def to_tree_frames(
+    values: np.ndarray,
+    rotations: np.ndarray,
+    tree_rotations: np.ndarray,
+    num_players: int,
+    seat_ids: Optional[list] = None,
+):
     """Values with seat ``rotations[b]`` of the seating order first, re-rotated so seat ``tree_rotations[b]``
-    is first (the frame ``mcts_apply_results`` unrotates by); padded seats untouched."""
+    is first (the frame ``mcts_apply_results`` unrotates by); padded seats untouched. The tree numbers the
+    players sorted by id; ``seat_ids[b]`` (optional) is the seating order the generic frame rotates over, when it
+    may differ from that (the 1822 family reorders its players): such a row is mapped through the player ids."""
     out = np.array(values, dtype=np.float32, copy=True)
+    n = num_players
+    reordered = set()
+    if seat_ids is not None:
+        for b, ids in enumerate(seat_ids):
+            ids = [int(i) for i in ids]
+            order = sorted(ids)
+            if ids == order:
+                continue  # the tree's order: a rotation (below)
+            reordered.add(b)
+            absolute = np.zeros(n, dtype=np.float32)
+            for k in range(n):
+                absolute[order.index(ids[(k + int(rotations[b])) % n])] = values[b, k]
+            out[b, :n] = absolute[(np.arange(n) + int(tree_rotations[b])) % n]
     for b in np.flatnonzero(np.asarray(rotations) != np.asarray(tree_rotations)):
+        if b in reordered:
+            continue
         shift = int(tree_rotations[b] - rotations[b]) % num_players
         out[b, :num_players] = np.roll(values[b, :num_players], -shift)
     return out
@@ -452,7 +506,13 @@ class LockstepSearcher:
                     stats.requests += 1
                     stats.leaves += n_leaves
                     stats.policy_states += len(reqs)
-                    in_flight[-1][5] = (self.evaluators[key].send_games(games, legal), n_leaves)
+                    if "price_ranges" in batch:
+                        # A generator title's leaves come with their moves' price ranges (no second generation).
+                        ranges = split_legal(batch["price_ranges"], batch["legal_lengths"]) + [None] * len(reqs)
+                        sent = self.evaluators[key].send_games(games, legal, ranges)
+                    else:
+                        sent = self.evaluators[key].send_games(games, legal)
+                    in_flight[-1][5] = (sent, n_leaves)
                     continue
                 batch = engine_rs.mcts_collect_leaves(
                     trees,
@@ -497,24 +557,49 @@ class LockstepSearcher:
                 leaf_values = result.values[:n_leaves]
                 if result.rotations is not None and n_leaves:
                     leaf_values = to_tree_frames(
-                        leaf_values, result.rotations[:n_leaves], batch["rotations"], int(batch["num_players"])
+                        leaf_values,
+                        result.rotations[:n_leaves],
+                        batch["rotations"],
+                        int(batch["num_players"]),
+                        None if result.seat_ids is None else result.seat_ids[:n_leaves],
                     )
-                engine_rs.mcts_apply_results(
-                    trees,
-                    result.priors[:n_priors],
-                    leaf_values,
-                    [s.prior_temperature for s in group],
-                    None if price is None or not n_leaves else np.ascontiguousarray(price[:n_leaves]),
-                    result.slot_index if price is not None and n_leaves else None,
-                )
+                if result.price_rows is not None:
+                    # Per-move price rows (a generator title): the leaves' rows go to their trees.
+                    leaf_rows = result.price_rows < n_priors
+                    engine_rs.mcts_apply_results(
+                        trees,
+                        result.priors[:n_priors],
+                        leaf_values,
+                        [s.prior_temperature for s in group],
+                        None,
+                        None,
+                        np.ascontiguousarray(result.price_rows[leaf_rows], dtype=np.int64),
+                        np.ascontiguousarray(result.price_row_logits[leaf_rows], dtype=np.float32).reshape(
+                            -1, result.price_row_logits.shape[-1]
+                        ),
+                    )
+                else:
+                    engine_rs.mcts_apply_results(
+                        trees,
+                        result.priors[:n_priors],
+                        leaf_values,
+                        [s.prior_temperature for s in group],
+                        None if price is None or not n_leaves else np.ascontiguousarray(price[:n_leaves]),
+                        result.slot_index if price is not None and n_leaves else None,
+                    )
                 entry[1] = None  # applied
                 offset = n_priors
                 for j, r in enumerate(reqs):
                     n = len(r.legal)
                     r.priors = result.priors[offset:offset + n]
-                    offset += n
                     r.value = result.values[n_leaves + j]
-                    r.price_row = None if price is None else price[n_leaves + j]
+                    if result.price_rows is not None:
+                        # {legal row: cell log-probabilities} of the request's priced moves
+                        mine = np.flatnonzero((result.price_rows >= offset) & (result.price_rows < offset + n))
+                        r.price_row = {int(result.price_rows[i]) - offset: result.price_row_logits[i] for i in mine}
+                    else:
+                        r.price_row = None if price is None else price[n_leaves + j]
+                    offset += n
                 stats.apply_seconds += time.perf_counter() - ta
         except BaseException:
             # Leave no tree with leaves pending (their virtual losses would stay).

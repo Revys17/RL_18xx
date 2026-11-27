@@ -10,6 +10,23 @@ cell from the head over the legal range, a price inside it). Each side runs in t
 ``--server``, on a generic inference server (the GPU when there is one). Side A holds ``--a-seats`` of
 ``--num-players`` seats in every arrangement; equal strength scores ``a_seats / players``.
 
+**Searched sides** (``docs/rl_model.md`` "Searching 1867"): a side given in ``eval_head_to_head.py``'s player grammar
+-- ``generic:<policy>[+generic:<critic>][#win|#score|#blend=<w>][@<readouts>][/<c_puct_init>][:<option>,...]`` (a
+``+``, ``#`` or ``:`` part; ``:sample=<t>`` is the policy alone at temperature t) -- searches every decision with the
+Rust tree over the title's generator moves (``generic_search.GenericSearchPlayer``): priors and price cells from the
+policy, values from the critic's head (``#score``: placement points, finished games backed up as placement points
+when the critic's run trained a placement reward), the most visited move played (``--softpick N``: visit-sampled for
+a side's first N decisions). All of a worker's searches run in lockstep (``lockstep.LockstepSearcher``, one request
+per round and network: ``--games-per-task`` games' leaves together), on generic inference servers with ``--server``
+(one per checkpoint of a searched side: its policy and its critic), else in the workers. A side keeps its tree while
+the game's position is its root (its own consecutive decisions). Which side decides a position is the deciding
+player's (``engine_rs.mcts_decider_id``: the encoder's mover, except 1867's stock-round home token, which the opening
+bidder chooses -- the encoder names nobody there and seat 1 used to choose for every side).
+
+    uv run python scripts/eval_generic.py --title 1867 --num-players 4 --games 480 --server --games-per-task 8 \
+        --match "generic:$R/learner/2000.pth+generic:$R/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5" \
+                "$R/learner/2000.pth@0.5"
+
 Optional rules (1822's 1822+ / tax-haven combinations, ``titles.TitleSpec.rules_mix``): ``--rules <name>`` plays
 every game under one combination (``base``, ``plus``, ``plus+nr+ss+th``, ...), ``--rules-mix <name>:<weight>,...``
 draws each start's combination (seeded by the start index, like the start: every seat arrangement of a start plays
@@ -58,6 +75,41 @@ def parse_player(spec: str) -> tuple:
     return str(Path(path)), float(temperature) if temperature else 1.0
 
 
+def is_search_spec(spec: str) -> bool:
+    """Whether a side is given in ``eval_head_to_head.py``'s grammar (a ``+``, ``#`` or ``:`` part)."""
+    from rl18xx.agent.alphazero.generic_policy import GENERIC_PREFIX
+
+    body = spec.replace("+" + GENERIC_PREFIX, "+")
+    body = body[len(GENERIC_PREFIX) :] if body.startswith(GENERIC_PREFIX) else body
+    return any(c in body for c in "+#:")
+
+
+def parse_side(spec: str, readouts: int) -> dict:
+    """A side: ``{"kind": "policy", "path", "temperature"}`` or ``{"kind": "search", "policy", "value",
+    "value_head", "overrides"}`` (``generic_search.parse_search_spec``)."""
+    if not is_search_spec(spec):
+        path, temperature = parse_player(spec)
+        return {"kind": "policy", "path": path, "temperature": temperature}
+    from rl18xx.agent.alphazero.generic_search import parse_search_spec
+
+    try:
+        s = parse_search_spec(spec, default_readouts=readouts)
+    except (ValueError, FileNotFoundError) as e:
+        raise SystemExit(f"{spec!r}: {e}")
+    if s.policy_only:
+        if s.value:
+            raise SystemExit(f"{spec!r}: sample=<t> plays the policy alone (no value part)")
+        return {"kind": "policy", "path": s.policy, "temperature": s.overrides["policy_temperature"]}
+    return {"kind": "search", "policy": s.policy, "value": s.value, "value_head": s.value_head,
+            "overrides": s.overrides}  # fmt: skip
+
+
+def side_paths(side: dict) -> list:
+    if side["kind"] == "policy":
+        return [side["path"]]
+    return [p for p in (side["policy"], side["value"]) if p]
+
+
 _LOCAL: dict = {}
 
 
@@ -72,6 +124,34 @@ def _policy(path: str):
     return _LOCAL[path]
 
 
+def _search_setup(settings: dict) -> tuple:
+    """``(LockstepSearcher, {side: SearchSpec})`` of the searched sides (None, {} without any): each side's
+    evaluator on its generic servers (``--server``) or in-process clients."""
+    from rl18xx.agent.alphazero import generic_pg as gpg
+    from rl18xx.agent.alphazero.generic_search import SearchSpec
+    from rl18xx.agent.alphazero.lockstep import GenericEvaluator, LockstepSearcher
+
+    specs, evaluators = {}, {}
+    for side, sp in (settings.get("search") or {}).items():
+        specs[side] = SearchSpec(sp["policy"], sp["value"], sp["value_head"], dict(sp["overrides"]))
+        if settings["server"]:
+            policy, value = gpg._CLIENTS[f"{side}:policy"], gpg._CLIENTS.get(f"{side}:value")
+            evaluators[side] = GenericEvaluator(policy, value, sp["value_head"])
+        else:
+            value = _policy(sp["value"]) if sp["value"] else None
+            evaluators[side] = GenericEvaluator(_policy(sp["policy"]), value, sp["value_head"], compress=False)
+    return (LockstepSearcher(evaluators) if evaluators else None), specs
+
+
+def decider_seat(raw, seating) -> int:
+    """The seating index of the player who decides ``raw``'s position (``engine_rs.mcts_decider_id``; nobody: the
+    first player, as the encoder's seat 0)."""
+    import engine_rs
+
+    decider = engine_rs.mcts_decider_id(raw)
+    return list(seating).index(int(raw.players[0].id if decider is None else decider))
+
+
 def play_games(game_indices: list, settings: dict) -> list:
     """Pool task: play the given games concurrently; one record per game."""
     import torch
@@ -81,11 +161,13 @@ def play_games(game_indices: list, settings: dict) -> list:
     from rl18xx.agent.alphazero.generic_inference import slice_positions
     from rl18xx.agent.alphazero.generic_play import ALL_PASS, MAX_ALL_PASS_REDRAWS, all_pass_opening, replayed_start
     from rl18xx.agent.alphazero.generic_play import title_play
+    from rl18xx.agent.alphazero.generic_search import GenericSearchPlayer
     from rl18xx.agent.alphazero.generic_tokens import encode_batch
     from rl18xx.agent.alphazero.titles import draw_rules, rules_name
 
     torch.set_num_threads(1)
     rng = np.random.default_rng()
+    searcher, search_specs = _search_setup(settings)
     title = settings["title"]
     play = title_play(title)
     seatings = [tuple(a) for a in settings["arrangements"]]
@@ -110,6 +192,8 @@ def play_games(game_indices: list, settings: dict) -> list:
         # the fresh game in this order
         g.seating = sorted(int(p.id) for p in raw.players)
         g.redraws = redraws
+        g.trees = {}  # searched side -> its GenericSearchPlayer in this game
+        g.searched = defaultdict(int)  # searched side -> decisions it searched
         return g
 
     games = [new_game(idx) for idx in game_indices]
@@ -140,15 +224,29 @@ def play_games(game_indices: list, settings: dict) -> list:
         active = [g for g, _ in pending]
         if not pending:
             break
-        enc = encode_batch([g.raw for g, _ in pending])
-        rotation = enc["meta"][:, 5]
         by_side = defaultdict(list)
         for i, (g, _) in enumerate(pending):
-            by_side[g.seat_models[gpg.mover_seat(g.raw, g.seating, int(rotation[i]))]].append(i)
+            by_side[g.seat_models[decider_seat(g.raw, g.seating)]].append(i)
+        searched = [(side, i) for side in search_specs for i in by_side.pop(side, [])]
+        policy_rows = sorted(i for rows in by_side.values() for i in rows)
+        enc = encode_batch([pending[i][0].raw for i in policy_rows]) if policy_rows else None
+        local = {i: j for j, i in enumerate(policy_rows)}
         sent = {}
         for side, rows in by_side.items():
-            arrays = mg.add_legal_inputs(slice_positions(enc, rows), [pending[i][1] for i in rows])
+            arrays = mg.add_legal_inputs(slice_positions(enc, [local[i] for i in rows]), [pending[i][1] for i in rows])
             sent[side] = (client(side).send_inputs(arrays, price_eps=settings["price_eps"]), rows, arrays)
+        searches = []
+        for side, i in searched:
+            g, _ = pending[i]
+            player = g.trees.get(side)
+            if player is None:
+                player = g.trees[side] = GenericSearchPlayer(
+                    search_specs[side].config(n, softpick_move_cutoff=settings.get("softpick", 0))
+                )
+            player.follow(g.raw)
+            searches.append((side, i, player.start_search(key=side)))
+        if searches:
+            searcher.run([s for _, _, s in searches if s is not None])
         for side, (request, rows, arrays) in sent.items():
             reply = client(side).receive_outputs(request)
             offsets = arrays["legal_offsets"]
@@ -166,6 +264,21 @@ def play_games(game_indices: list, settings: dict) -> list:
                 g.auction_decisions += g.raw.round.round_type == "Auction"
                 if gpg.apply_move(g, play, legal, k, price):  # (a refused move ends the game: "rejected_move")
                     g.decisions += 1
+        for side, i, _ in searches:
+            g, legal = pending[i]
+            player = g.trees[side]
+            g.auction_decisions += g.raw.round.round_type == "Auction"
+            actions = player.play(player.pick_move())
+            try:
+                for action in actions:  # the move at its price, then the forced moves after it
+                    g.raw.process_action(dict(action))
+            except RuntimeError as e:
+                g.rejected = {"wire": actions[0] if actions else None, "error": str(e)[:300],
+                              "action_count": len(g.raw.raw_actions)}  # fmt: skip
+                g.termination = "rejected_move"
+                continue
+            g.decisions += 1
+            g.searched[side] += 1
 
     records = []
     for g in finished:
@@ -183,6 +296,10 @@ def play_games(game_indices: list, settings: dict) -> list:
             "optional_rules": list(getattr(g.raw, "optional_rules", None) or []),
             "all_pass_redrawn": g.redraws,
         }
+        if g.trees:
+            record["search"] = {
+                side: {"decisions": g.searched[side], "kept_trees": player.kept} for side, player in g.trees.items()
+            }
         if g.rejected:
             record["rejected_move"] = g.rejected
         if g.idx < settings.get("save_games", 0) or g.rejected:
@@ -201,19 +318,29 @@ def run_match(a_spec: str, b_spec: str, args) -> tuple:
     from rl18xx.agent.alphazero.generic_inference import start_generic_inference_server
     from rl18xx.agent.alphazero.inference_server import wait_checking_servers
 
-    players = {"A": parse_player(a_spec), "B": parse_player(b_spec)}
-    for path, _ in players.values():
-        gpg.check_generic_checkpoint(path, args.title)
+    sides = {"A": parse_side(a_spec, args.readouts), "B": parse_side(b_spec, args.readouts)}
+    for side in sides.values():
+        for path in side_paths(side):
+            gpg.check_generic_checkpoint(path, args.title)
+    policy_sides = {name: s for name, s in sides.items() if s["kind"] == "policy"}
+    search_sides = {name: s for name, s in sides.items() if s["kind"] == "search"}
     handles = {}
     if args.server:
+        servers = {name: s["path"] for name, s in policy_sides.items()}
+        for name, s in search_sides.items():
+            servers[f"{name}:policy"] = s["policy"]
+            if s["value"]:
+                servers[f"{name}:value"] = s["value"]
         handles = {
-            side: start_generic_inference_server(num_workers=args.workers, checkpoint_path=path, batch_size=1024)
-            for side, (path, _) in players.items()
+            key: start_generic_inference_server(num_workers=args.workers, checkpoint_path=path, batch_size=1024)
+            for key, path in servers.items()
         }
     settings = {
         "title": args.title,
-        "paths": {side: path for side, (path, _) in players.items()},
-        "temperatures": {side: t for side, (_, t) in players.items()},
+        "paths": {name: s["path"] for name, s in policy_sides.items()},
+        "temperatures": {name: s["temperature"] for name, s in policy_sides.items()},
+        "search": search_sides,
+        "softpick": args.softpick + args.softpick % 2,
         "server": bool(args.server),
         "seed": args.seed,
         "start_positions": args.start_positions,
@@ -326,6 +453,14 @@ def main():
         "titles.TitleSpec.rules_mix)",
     )
     parser.add_argument("--server", action="store_true", help="Each side on a generic inference server")
+    parser.add_argument(
+        "--readouts", type=int, default=200, help="A searched side's budget per decision when its spec has no @<n>"
+    )
+    parser.add_argument(
+        "--softpick", type=int, default=0,
+        help="A searched side samples its first N decisions in a game from the root visits (even; default 0: always "
+        "the most visited move)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default=None)
     parser.add_argument("--save-games", type=int, default=0)

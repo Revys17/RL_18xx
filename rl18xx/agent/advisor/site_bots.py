@@ -13,7 +13,8 @@ the extension's autoplay does; any other refusal, or a game the model can't foll
 alone until it changes (a human's undo, say) or the admin page says retry.
 
 Games of the other titles the hub has a policy for (1867: ``main.py advisor --title-policy``,
-:mod:`titled`) are played the same way, each move the policy's own. Our 1867 engine skips no step
+:mod:`titled`) are played the same way, each move the policy's own or its search's (``--title-search``).
+Our 1867 engine skips no step
 Ruby waits in (its cross-player rule only removes moves, so the bot passes or declines among its
 own), so a refused 1867 move is never turned into a pass: the engines disagree, and the game is left
 alone with the reason.

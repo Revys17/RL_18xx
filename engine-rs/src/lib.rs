@@ -82,6 +82,7 @@ fn engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_discard_pending, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_lockstep::encode_games, m)?)?;
     m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_terminal_value, m)?)?;
+    m.add_function(wrap_pyfunction!(mcts_lockstep::mcts_decider_id, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::action_offsets_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::policy_size_py, m)?)?;
     m.add_function(wrap_pyfunction!(action_index::policy_size_for_py, m)?)?;

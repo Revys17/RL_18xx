@@ -306,6 +306,27 @@ def legal_actions(
     return LegalActions(rows=rows, price_range=price_range, indices=idx, price_grid=d.price_grid)
 
 
+def legal_actions_with_ranges(game, indices: Sequence[int], ranges) -> LegalActions:
+    """:func:`legal_actions` of a generator title's position whose legal moves' ``(lo, hi, step)`` the caller
+    already has (``ranges``, one row per index, -1 for a move without a price -- the search tree's leaves,
+    ``engine_rs.mcts_collect_leaf_games``), without generating the moves again: the same rows, ranges and
+    ``price_grid``; no action dicts (``wires`` None)."""
+    g = raw_game(game)
+    d = action_descriptors(g.title)
+    if d.kind != "generator":
+        raise ValueError(f"{g.title}: legal_actions_with_ranges is for generator layouts (got {d.kind})")
+    idx = np.asarray(indices, dtype=np.int64)
+    ranges = np.asarray(ranges, dtype=np.int64).reshape(len(idx), 3)
+    rows = d.gather(idx)
+    price_range = np.full((len(idx), 3), -1, dtype=np.int64)
+    priced = rows[:, C_PRICE_KIND] >= 0
+    if np.any(ranges[priced, 0] < 0):
+        bad = idx[priced & (ranges[:, 0] < 0)]
+        raise ValueError(f"{g.title}: legal indices {bad.tolist()} have a price kind but no range")
+    price_range[priced] = ranges[priced]
+    return LegalActions(rows=rows, price_range=price_range, indices=idx, price_grid=True, wires=None)
+
+
 def _unique_rows(keys: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """``np.unique(keys, axis=0)``'s first-occurrence indices and inverse (1-D)."""
     _, first, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
