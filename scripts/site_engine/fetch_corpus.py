@@ -1,11 +1,12 @@
-"""Fetch the 1830 corpus of docs/SITE_ENGINE_RS.md §8.1 into $RUST1/corpus (read-only, one request at a time).
+"""Fetch a title's corpus (docs/SITE_ENGINE_RS.md §8.1, SITE_ENGINE_RS_1867.md §10.1) into <root>/corpus (read-only,
+one request at a time). --title 1830 (step 1, root $RUST1) or 1867 (step 2, root $RUST2); --root overrides.
 
-    python3 scripts/site_engine/fetch_corpus.py dev  [--from 1] [--to N]   # :9301 GET /api/game/<id>  -> corpus/g9301/
-    python3 scripts/site_engine/fetch_corpus.py prod [--from 1] [--to N]   # :9292 bot API, read-only  -> corpus/prod/
+    python3 scripts/site_engine/fetch_corpus.py dev  [--title T] [--from 1] [--to N]  # :9301 GET /api/game/<id> -> corpus/g9301/
+    python3 scripts/site_engine/fetch_corpus.py prod [--title T] [--from 1] [--to N]  # :9292 bot API, read-only -> corpus/prod/
 
 prod uses the bot API's read-only GET /api/bot/game/<id> (its `game` key) with the token from
 ~/.config/18xx/local_site_bot_token (sent as a header, never printed); its files hold real users' names: mode 600,
-never printed or committed, deleted when the checks are done. Keeps 1830 games only; stops after --misses
+never printed or committed, deleted when the checks are done. Keeps the title's games only; stops after --misses
 consecutive missing ids. Prints counts only.
 """
 
@@ -18,7 +19,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-RUST1 = Path(os.environ.get("RUST1", "/tmp/claude-1000/-home-revys-workspace/252285c2-5545-52b0-bcda-165a3e4e9ceb/scratchpad/rust1"))
+SCRATCH = "/tmp/claude-1000/-home-revys-workspace/252285c2-5545-52b0-bcda-165a3e4e9ceb/scratchpad"
+ROOTS = {
+    "1830": Path(os.environ.get("RUST1", f"{SCRATCH}/rust1")),
+    "1867": Path(os.environ.get("RUST2", f"{SCRATCH}/rust2")),
+}
 
 
 def get(url, headers):
@@ -39,12 +44,15 @@ def main():
     ap.add_argument("--to", type=int, default=100000)
     ap.add_argument("--misses", type=int, default=150)
     ap.add_argument("--pause", type=float, default=0.05)
+    ap.add_argument("--title", default="1830", choices=sorted(ROOTS))
+    ap.add_argument("--root", help="the corpus root (default: $RUST1 for 1830, $RUST2 for 1867)")
     args = ap.parse_args()
+    root = Path(args.root) if args.root else ROOTS[args.title]
     if args.site == "dev":
-        base, out, headers = "http://127.0.0.1:9301/api/game/", RUST1 / "corpus" / "g9301", {}
+        base, out, headers = "http://127.0.0.1:9301/api/game/", root / "corpus" / "g9301", {}
     else:
         token = Path.home().joinpath(".config/18xx/local_site_bot_token").read_text().strip()
-        base, out = "http://127.0.0.1:9292/api/bot/game/", RUST1 / "corpus" / "prod"
+        base, out = "http://127.0.0.1:9292/api/bot/game/", root / "corpus" / "prod"
         headers = {"Authorization": f"Bearer {token}"}
     out.mkdir(parents=True, exist_ok=True)
     if args.site == "prod":
@@ -62,7 +70,7 @@ def main():
             continue
         misses = 0
         game = data.get("game", data) if args.site == "prod" else data
-        if game.get("title") != "1830" or game.get("status") == "new":
+        if game.get("title") != args.title or game.get("status") == "new":
             other += 1
             gid += 1
             continue
@@ -72,7 +80,7 @@ def main():
             json.dump(game, f)
         kept += 1
         gid += 1
-    print(f"{args.site}: kept {kept} 1830 games, {other} other, {missing} missing ids, last id tried {gid - 1}", file=sys.stderr)
+    print(f"{args.site}: kept {kept} {args.title} games, {other} other, {missing} missing ids, last id tried {gid - 1}", file=sys.stderr)
 
 
 if __name__ == "__main__":
