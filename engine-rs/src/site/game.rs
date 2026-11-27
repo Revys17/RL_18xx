@@ -491,6 +491,18 @@ impl SiteGame {
             Vec::new()
         };
         let merger_before = matches!(self.game.round, crate::rounds::Round::Merger(_));
+        // the company operating while its LoanOperations is still ahead in its turn: if this action ends the operating
+        // round, its LoanOperations ran inside it (G1867::Step::LoanOperations#skip!: interest, repayments, then
+        // `calculate_corporation_interest`) and the round's own count went with the round
+        let loan_ops_ahead: Option<String> = match &self.game.round {
+            crate::rounds::Round::Operating(s) if is_1867 => {
+                use crate::rounds::OperatingStep as P;
+                matches!(s.step, P::RedeemShares | P::LayTile | P::PlaceToken | P::RunRoutes | P::Dividend | P::BuyCompanyPreloan)
+                    .then(|| s.current_corp_sym().map(str::to_string))
+                    .flatten()
+            }
+            _ => None,
+        };
         let slots_before = if is_1867 { super::g1867::slot_owners(&self.game) } else { HashMap::new() };
         let ranks_before: HashMap<String, (i32, i32, u8, String)> = if is_1867 {
             self.game
@@ -540,6 +552,12 @@ impl SiteGame {
             self.token_cities.update(&slots_before, &rank, &self.game);
             if let crate::rounds::Round::Operating(s) = &self.game.round {
                 self.interest = s.interest_snapshot.clone();
+            } else if let Some(c) = loan_ops_ahead {
+                // Ruby's @interest[corporation] after its LoanOperations: the loans it holds once repaid (nothing after
+                // that step changes them in a turn that ended the round: its BuyTrain and BuyCompany were skipped)
+                if let Some(&ci) = self.game.corp_idx.get(&c) {
+                    self.interest.insert(c, self.game.corporations[ci].loans);
+                }
             }
         }
         self.check_programs(rounds_before, was_finished);
