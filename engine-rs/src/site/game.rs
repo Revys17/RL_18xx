@@ -143,6 +143,8 @@ pub struct SiteGame {
     pub engine_count: u64,
     /// The action being processed advanced the round's entity (Ruby next_turn!)
     turn_advanced: bool,
+    /// 1867's merger round state the engine doesn't keep (Ruby's `converts`, `merge_type`)
+    pub merger: super::g1867::MergerRecord,
 }
 
 impl Clone for SiteGame {
@@ -182,6 +184,7 @@ impl Clone for SiteGame {
             last_run_prices: self.last_run_prices.clone(),
             engine_count: self.engine_count,
             turn_advanced: self.turn_advanced,
+            merger: self.merger.clone(),
         }
     }
 }
@@ -214,7 +217,7 @@ impl SiteGame {
     /// The site's game JSON. Nothing processed yet; undo/redo already resolved over all raw actions.
     pub fn load(data: &Value) -> Result<SiteGame, String> {
         let title = data.get("title").and_then(Value::as_str).unwrap_or("");
-        if title != "1830" {
+        if !super::TITLES.contains(&title) {
             return Err(unsupported(format!("title {title}")));
         }
         let rules: Vec<String> = data
@@ -222,7 +225,8 @@ impl SiteGame {
             .and_then(Value::as_array)
             .map(|xs| xs.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
             .unwrap_or_default();
-        let supported = crate::title::resolve("1830").optional_rules();
+        // 1867's optional rule (grid_market) is not in engine-rs: none is supported
+        let supported = crate::title::resolve(title).optional_rules();
         if let Some(bad) = rules.iter().find(|r| !supported.contains(&r.as_str())) {
             return Err(unsupported(format!("optional rule {bad}")));
         }
@@ -233,18 +237,32 @@ impl SiteGame {
             let bot = p.get("bot").and_then(Value::as_bool).unwrap_or(false);
             players.push((id, name, bot));
         }
+        if title == "1867" && players.len() == 2 {
+            // Ruby's setup_for_2_players (fewer trains, two privates removed at random): engine-rs has no 2-player
+            // 1867 (docs/SITE_ENGINE_RS_1867.md §3.1)
+            return Err(unsupported("1867 for 2 players"));
+        }
         if !(2..=6).contains(&players.len()) {
             return Err(unsupported(format!("{} players", players.len())));
         }
         let ids: Vec<u32> = players.iter().map(|p| p.0).collect();
         let names: HashMap<u32, String> = players.iter().map(|p| (p.0, p.1.clone())).collect();
-        let mut game = BaseGame::build_with_rules("1830", ids, names, rules);
+        let mut game = BaseGame::build_with_rules(title, ids, names, rules);
         game.site_rules = true;
         game.site = Some(Box::default());
-        let mut counts: Vec<(String, u32)> = game.tile_counts_remaining.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        // Ruby's TILES order (1830's are numbered in order)
-        counts.sort_by_key(|(k, _)| (k.parse::<u32>().unwrap_or(u32::MAX), k.clone()));
-        let supply = TileSupply::new(&counts);
+        let supply = if title == "1830" {
+            let mut counts: Vec<(String, u32)> =
+                game.tile_counts_remaining.iter().map(|(k, v)| (k.clone(), *v)).collect();
+            // Ruby's TILES order (1830's are numbered in order)
+            counts.sort_by_key(|(k, _)| (k.parse::<u32>().unwrap_or(u32::MAX), k.clone()));
+            TileSupply::new(&counts)
+        } else {
+            // Ruby's TILES order is the title's own list (g_1867/map.rb); 'unlimited' tiles (7, 8, 9) are one
+            // instance at a time (Game::Base#add_extra_tile)
+            let counts: Vec<(String, u32)> =
+                game.title_def().tile_counts().into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+            TileSupply::new(&counts)
+        };
         let raw: Vec<Value> = data.get("actions").and_then(Value::as_array).cloned().unwrap_or_default();
         let (kept, redo) = filtered_actions(&raw);
         let mut meta = data.clone();
@@ -264,7 +282,8 @@ impl SiteGame {
             last_game_action_id: 0,
             stopped: None,
             supply,
-            swapped: SWAPPED_PREPRINTED_CITIES.to_vec(),
+            // G19's two cities are numbered the other way round in 1830 only (1867's preprinted cities agree)
+            swapped: if title == "1830" { SWAPPED_PREPRINTED_CITIES.to_vec() } else { Vec::new() },
             programs: BTreeMap::new(),
             manually_ended: false,
             last_runs: HashMap::new(),
@@ -286,6 +305,7 @@ impl SiteGame {
             last_run_prices: None,
             engine_count: 0,
             turn_advanced: false,
+            merger: Default::default(),
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -320,6 +340,14 @@ impl SiteGame {
             return None;
         }
         if t == "message" {
+            // Ruby's process_action runs a message's recorded auto actions too (docs/SITE_ENGINE_RS_1867.md §3.1);
+            // a message makes no step
+            if a.get("auto_actions").and_then(Value::as_array).is_some_and(|x| !x.is_empty()) {
+                if let Err(e) = self.apply_autos(&a) {
+                    self.stopped = Some(Stop { action_id: id, index: self.index, message: e });
+                    return None;
+                }
+            }
             self.current_action_id = id;
             return None;
         }
@@ -400,7 +428,11 @@ impl SiteGame {
             return Ok(());
         }
         if t == "run_routes" {
-            let prices = super::shadow::price_routes(self, a).unwrap_or_default();
+            let prices = if self.game.title == "1867" {
+                super::g1867::price_routes(self, a).unwrap_or_default()
+            } else {
+                super::shadow::price_routes(self, a).unwrap_or_default()
+            };
             self.last_run_prices = Some((aid(a), prices));
         }
         self.apply_engine(a).map_err(|e| e.message)?;
@@ -439,8 +471,23 @@ impl SiteGame {
         let key_before = self.turn_key();
         let step_before = self.game.active_step_type();
         let rounds_before = self.finished_rounds();
+        let is_1867 = self.game.title == "1867";
+        let or_before = match &self.game.round {
+            crate::rounds::Round::Operating(s) if is_1867 => Some((self.game.turn, s.round_num)),
+            _ => None,
+        };
+        let parred_before: Vec<String> = if is_1867 {
+            self.game.corporations.iter().filter(|c| c.ipo_price.is_some() && !c.closed).map(|c| c.sym.clone()).collect()
+        } else {
+            Vec::new()
+        };
+        let merger_before = matches!(self.game.round, crate::rounds::Round::Merger(_));
         self.game.process_action_internal(&action)?;
         self.engine_count += 1;
+        if is_1867 {
+            self.records_1867(&translated, &action, or_before, &parred_before);
+            self.merger.update(merger_before, &self.game.round);
+        }
         self.check_programs(rounds_before, was_finished);
         // the turn in progress (Ruby's round.current_actions), move by move, auto actions included: Ruby advances the
         // round's entity index (next_turn!) also when it comes back round to the same player (the others skipped,
@@ -477,6 +524,43 @@ impl SiteGame {
         match action {
             Action::LayTile { hex_id, .. } => self.game.hex_ref(hex_id).map(|h| h.tile.name.clone()),
             _ => None,
+        }
+    }
+
+    /// 1867's records the engine keeps no hook for (docs/SITE_ENGINE_RS_1867.md §3.1), around one engine action:
+    /// a minor's automatic payout (`G1867::Step::Dividend#skip!`: `payout` when its run paid, processed inside its
+    /// `run_routes`; the revenue-0 withhold is H2's) and a nationalized major's fresh start (`reset_corporation`: its
+    /// operating history empty).
+    fn records_1867(&mut self, raw: &Value, action: &Action, or_before: Option<(u32, u8)>, parred_before: &[String]) {
+        if let (Action::RunRoutes { entity_id, .. }, Some((turn, round))) = (action, or_before) {
+            let minor = self.game.corp_idx.get(entity_id.as_str()).is_some_and(|&ci| {
+                self.game.corporations[ci].corp_type == crate::title::CorpType::Minor
+            });
+            // each route's recorded revenue, else the engine's own price of it (what the engine paid)
+            let prices = self.last_run_prices.as_ref().filter(|(id, _)| *id == aid(raw)).map(|(_, p)| p.clone());
+            let revenue: i32 = raw
+                .get("routes")
+                .and_then(Value::as_array)
+                .map(|rs| {
+                    rs.iter()
+                        .enumerate()
+                        .map(|(k, r)| match r.get("revenue").and_then(Value::as_i64) {
+                            Some(v) => v as i32,
+                            None => prices.as_ref().and_then(|p| p.get(k)).copied().unwrap_or(0),
+                        })
+                        .sum::<i32>()
+                })
+                .unwrap_or(0);
+            if minor && revenue > 0 {
+                self.game.site_note_operated_at(entity_id, turn, round, revenue, "payout", false);
+            }
+        }
+        for sym in parred_before {
+            let Some(&ci) = self.game.corp_idx.get(sym.as_str()) else { continue };
+            let c = &self.game.corporations[ci];
+            if !c.closed && c.ipo_price.is_none() {
+                self.game.site_forget_operated(sym);
+            }
         }
     }
 
@@ -667,6 +751,25 @@ impl SiteGame {
         }
         if self.manually_ended {
             Some("manually_ended")
+        } else if self.game.title == "1867" {
+            // Ruby game_end_check over GAME_END_CHECK {bank: :current_or, final_phase: :one_more_full_or_set}: the
+            // latched trigger whose timing comes first in GAME_END_TIMING_PRIORITY (1867: the final phase's)
+            let title = self.game.title_def();
+            let final_phase = title.phases().last().is_some_and(|p| p.name == self.game.phase.name);
+            let mut latched: Vec<(&'static str, crate::title::GameEndTiming)> = Vec::new();
+            if self.game.bank_broken {
+                latched.push(("bank", title.bank_game_end_timing()));
+            }
+            if final_phase {
+                latched.push(("final_phase", crate::title::GameEndTiming::OneMoreFullOrSet));
+            }
+            let priority = title.game_end_timing_priority();
+            Some(
+                latched
+                    .into_iter()
+                    .min_by_key(|(_, t)| priority.iter().position(|p| p == t).unwrap_or(usize::MAX))
+                    .map_or("unknown", |(r, _)| r),
+            )
         } else if self.game.players.iter().any(|p| p.bankrupt) {
             Some("bankrupt")
         } else if self.game.bank_broken {

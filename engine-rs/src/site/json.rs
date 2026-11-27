@@ -182,7 +182,16 @@ pub fn action_from_json(a: &Value) -> Result<Action, GameError> {
         "buy_company" => Action::BuyCompany { entity_id, company_sym: s(a, "company")?, price: i(a, "price")? },
         "bankrupt" => Action::Bankrupt { entity_id },
         "choose" => Action::Choose { entity_id, choice: s(a, "choice")? },
-        other => return Err(GameError::new(format!("unsupported action type for 1830: {other}"))),
+        // 1867's merger round (docs/SITE_ENGINE_RS_1867.md §3.1): one wire type `merge` for adding a minor, naming
+        // the major of a merger or of a conversion (Ruby's step state tells them apart); `convert`; `remove_token`
+        // (ReduceTokens: a city by id and its slot)
+        "merge" => Action::Merge { entity_id, corporation_sym: s(a, "corporation")? },
+        "convert" => Action::Convert { entity_id },
+        "remove_token" => {
+            let (hex_id, city_index) = parse_city_ref(&s(a, "city")?);
+            Action::RemoveToken { entity_id, hex_id, city_index, slot: opt_i(a, "slot")?.unwrap_or(0) as u8 }
+        }
+        other => return Err(GameError::new(format!("unsupported action type: {other}"))),
     })
 }
 
@@ -238,18 +247,27 @@ pub fn swap_city_refs(action: &Value, hexes: &[&str]) -> Value {
 #[derive(Clone, Debug, Default)]
 pub struct TileSupply {
     list: Vec<String>,
+    /// Ruby's unlimited tiles (1867's 7, 8, 9) with the highest instance index made so far
+    unlimited: Vec<(String, u32)>,
 }
 
 impl TileSupply {
-    /// The title's tile counts (`name -> count`, the instances are "<name>-<i>"), in the title's TILES order.
+    /// The title's tile counts (`name -> count`, the instances are "<name>-<i>"), in the title's TILES order. A count
+    /// of `u32::MAX` is Ruby's `'unlimited'`: one instance in the list at a time (`Game::Base#add_extra_tile`).
     pub fn new(counts: &[(String, u32)]) -> Self {
         let mut list = Vec::new();
+        let mut unlimited = Vec::new();
         for (name, n) in counts {
+            if *n == u32::MAX {
+                unlimited.push((name.clone(), 0));
+                list.push(format!("{name}-0"));
+                continue;
+            }
             for i in 0..*n {
                 list.push(format!("{name}-{i}"));
             }
         }
-        TileSupply { list }
+        TileSupply { list, unlimited }
     }
 
     /// Ruby's choice of the next `name` tile, if any is left.
@@ -263,7 +281,16 @@ impl TileSupply {
     }
 
     /// A lay of tile instance `laid` over `old` (the hex's tile before: an instance id, or a preprinted hex's name).
+    /// Ruby `update_tile_lists`: an unlimited tile's next instance is made first and goes at the end (`add_extra_tile`:
+    /// the highest index made so far + 1), then the laid one leaves, then the tile upgraded over comes back at the end.
     pub fn laid(&mut self, laid: &str, old: &str) {
+        if let Some(name) = tile_name(laid) {
+            if let Some(u) = self.unlimited.iter_mut().find(|u| u.0 == name) {
+                let idx = laid.rsplit_once('-').and_then(|(_, i)| i.parse::<u32>().ok()).unwrap_or(0);
+                u.1 = u.1.max(idx) + 1;
+                self.list.push(format!("{name}-{}", u.1));
+            }
+        }
         self.list.retain(|t| t != laid);
         if tile_name(old).is_some() && !self.list.iter().any(|t| t == old) {
             self.list.push(old.to_string());

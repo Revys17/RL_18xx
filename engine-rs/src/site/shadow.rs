@@ -165,12 +165,34 @@ fn owner_code(e: &EntityId) -> String {
 /// The shadow key of the position now. `last` is the raw action the position follows (None at the start).
 pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
     let finished = g.game.finished;
+    let is_1867 = super::g1867::is_1867(g);
     let info = super::view::round_info(g);
-    let acting: Vec<u32> = if finished { Vec::new() } else { super::view::active_players(g) };
-    let entity = ruby_entity(g);
-    let step = ruby_step_class(g);
-    let actions = ruby_actions(g);
+    let acting: Vec<u32> = if finished {
+        Vec::new()
+    } else if is_1867 {
+        super::g1867::active_players(&mut g.game)
+    } else {
+        super::view::active_players(g)
+    };
+    let (entity, step, actions) = if is_1867 {
+        let active = super::g1867::active_step(&mut g.game);
+        let actions = if finished { Vec::new() } else { super::g1867::ruby_actions(&mut g.game) };
+        (
+            active.as_ref().map(|(_, e)| super::g1867::entity_id(e)),
+            active.map(|(k, _)| super::g1867::step_class(k)),
+            actions,
+        )
+    } else {
+        (ruby_entity(g), ruby_step_class(g), ruby_actions(g))
+    };
     let priority = super::view::priority(g);
+    let auction = super::g1867::key::auction(g);
+    // Ruby's `engine.corporations` (1830: every corporation not closed; 1867: §3.1's membership)
+    let members: Vec<usize> = if is_1867 {
+        super::g1867::ruby_corporations(&g.game)
+    } else {
+        (0..g.game.corporations.len()).filter(|&i| !g.game.corporations[i].closed).collect()
+    };
     let game = &g.game;
 
     let mut players = Vec::new();
@@ -178,7 +200,7 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
         let Some(p) = game.players.iter().find(|p| p.id == pid) else { continue };
         let pe = EntityId::player(pid);
         let mut shares = Map::new();
-        for c in game.corporations.iter().filter(|c| !c.closed) {
+        for c in members.iter().map(|&i| &game.corporations[i]) {
             let pct: u32 = c.shares.iter().filter(|s| s.owner == pe).map(|s| s.percent as u32).sum();
             if pct > 0 {
                 shares.insert(c.sym.clone(), json!(pct));
@@ -191,7 +213,7 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
     }
 
     let mut corps = Map::new();
-    for c in game.corporations.iter().filter(|c| !c.closed) {
+    for c in members.iter().map(|&i| &game.corporations[i]) {
         let sp = c.share_price.as_ref();
         let held: u32 = c.shares.iter().filter(|s| s.owner.is_player() || s.owner.is_market()).map(|s| s.percent as u32).sum();
         let market: u32 = c.shares.iter().filter(|s| s.owner.is_market()).map(|s| s.percent as u32).sum();
@@ -205,13 +227,12 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
             .and_then(|r| r.op_history.get(&c.sym))
             .and_then(|l| l.iter().max_by_key(|e| (e.turn, e.round)))
             .map_or(Value::Null, |e| json!([e.turn, e.round, e.revenue, e.kind]));
-        corps.insert(
-            c.sym.clone(),
-            json!({
+        let mut cm = json!({
                 "cash": c.cash,
                 "price": sp.map(|s| s.price),
                 "cell": sp.map(|s| json!([s.row, s.column])),
-                "par": c.ipo_price.as_ref().map(|s| s.price),
+                // Ruby Corporation#par_price: the share price for a company `always_market_price` (1867's)
+                "par": if c.always_market_price { sp.map(|s| s.price) } else { c.ipo_price.as_ref().map(|s| s.price) },
                 "floated": c.floated,
                 "closed": c.closed,
                 "ipo": 100u32.saturating_sub(held),
@@ -221,8 +242,13 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
                 "tokens": token_places(g, &c.sym, &c.tokens),
                 "companies": companies,
                 "last_run": last_run,
-            }),
-        );
+            });
+        if is_1867 {
+            if let Some(m) = cm.as_object_mut() {
+                super::g1867::key::corp_fields(g, &c.sym, m);
+            }
+        }
+        corps.insert(c.sym.clone(), cm);
     }
 
     let mut companies = Map::new();
@@ -230,7 +256,11 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
         companies.insert(m.sym.clone(), json!(if m.closed { "closed".to_string() } else { owner_code(&m.owner) }));
     }
 
-    let upcoming: Vec<Value> = super::view::upcoming(g).into_iter().map(|t| t["id"].clone()).collect();
+    let upcoming: Vec<Value> = if is_1867 {
+        super::g1867::view::upcoming(g).into_iter().map(|t| t["id"].clone()).collect()
+    } else {
+        super::view::upcoming(g).into_iter().map(|t| t["id"].clone()).collect()
+    };
     let discarded: Vec<String> = game.depot.discarded.iter().map(|t| t.id.clone()).collect();
 
     let mut hexes = Map::new();
@@ -262,7 +292,7 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
         }
     };
 
-    json!({
+    let mut out = json!({
         "v": super::KEY_VERSION,
         "round": info["name"],
         "turn": game.turn,
@@ -284,7 +314,17 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
         "manually_ended": finished && g.manually_ended,
         "game_end_reason": g.end_reason(),
         "last_action": last_action,
-    })
+    });
+    // v2 (docs/SITE_ENGINE_RS_1867.md §6): the fields only some titles have, and every title's auction in progress
+    if let Some(m) = out.as_object_mut() {
+        if is_1867 {
+            super::g1867::key::game_fields(g, m);
+        }
+        if let Some(a) = auction {
+            m.insert("auction".into(), a);
+        }
+    }
+    out
 }
 
 /// The raw action the position now follows: the last raw action processed (any type), None at the start.

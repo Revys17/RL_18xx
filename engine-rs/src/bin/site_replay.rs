@@ -2,7 +2,7 @@
 //! reports where they stop, whether finished games end with the site's result, and how long it takes.
 //!
 //! cargo run --release --no-default-features --features site --bin site_replay -- [<corpus dir or game .json>...]
-//!     [--report <json>] [--views] [--goldens <dir>] [--verbose] [--digest]
+//!     [--report <json>] [--views] [--goldens <dir>] [--verbose] [--digest] [--title 1830|1867]
 //!     [--acts <cases.jsonl> [--acts-every N] [--acts-tiles N]]   (§8.3, K11)
 //!
 //! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
@@ -45,6 +45,7 @@ fn main() {
     let mut acts_every = 10usize;
     let mut acts_tiles = 5usize;
     let mut verbose = false;
+    let mut only_title: Option<String> = None;
     let mut i = 0;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -71,6 +72,10 @@ fn main() {
                 i += 1;
             }
             "--verbose" => verbose = true,
+            "--title" => {
+                only_title = argv.get(i + 1).cloned();
+                i += 1;
+            }
             a => inputs.push(a.to_string()),
         }
         i += 1;
@@ -189,10 +194,17 @@ fn main() {
             }
         };
         let gid = data.get("id").map(|v| v.to_string()).unwrap_or_else(|| path.display().to_string());
-        if data.get("title").and_then(Value::as_str) != Some("1830") {
+        let title = data.get("title").and_then(Value::as_str).unwrap_or("");
+        if !engine_rs::site::TITLES.contains(&title) || only_title.as_deref().is_some_and(|t| t != title) {
             *counts.entry("other title".into()).or_default() += 1;
             continue;
         }
+        // a golden's game id: the site's id, or "<corpus dir>:<file stem>" (production and fixture games)
+        let alt_gid = format!(
+            "{}:{}",
+            path.parent().and_then(|p| p.file_name()).and_then(|x| x.to_str()).unwrap_or(""),
+            path.file_stem().and_then(|x| x.to_str()).unwrap_or("")
+        );
         let t0 = Instant::now();
         let mut g = match SiteGame::load(&data) {
             Ok(g) => g,
@@ -201,7 +213,9 @@ fn main() {
                 continue;
             }
         };
-        let golden = goldens.as_ref().and_then(|d| engine_rs::site::compare::load_golden(d, &gid));
+        let golden = goldens.as_ref().and_then(|d| {
+            engine_rs::site::compare::load_golden(d, &alt_gid).or_else(|| engine_rs::site::compare::load_golden(d, &gid))
+        });
         let mut steps = 0usize;
         if views || golden.is_some() {
             let mut cmp = golden.as_ref().map(|gd| engine_rs::site::compare::GameCompare::new(gd));

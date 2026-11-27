@@ -28,13 +28,18 @@ pub mod cli;
 pub mod compare;
 #[cfg(feature = "site")]
 pub mod acts;
+#[cfg(feature = "site")]
+pub mod g1867;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+/// The titles the site layer plays (docs/SITE_ENGINE_RS_1867.md §3.1): what `version()` lists.
+pub const TITLES: &[&str] = &["1830", "1867"];
+
 /// The engine's build: what `WasmGame.version()` and `site_engine version` print (docs/SITE_ENGINE_RS.md §3.2).
 pub const API_VERSION: u32 = 2;
-/// The shadow key's version (§5.3).
-pub const KEY_VERSION: u32 = 1;
+/// The shadow key's version (docs/SITE_ENGINE_RS.md §5.3; v2: docs/SITE_ENGINE_RS_1867.md §6).
+pub const KEY_VERSION: u32 = 2;
 /// The commit the engine was built from (site/build-site.sh sets ENGINE_RS_COMMIT; "dev" otherwise).
 pub const COMMIT: &str = match option_env!("ENGINE_RS_COMMIT") {
     Some(c) => c,

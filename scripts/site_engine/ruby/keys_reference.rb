@@ -5,7 +5,8 @@
 #
 # v2 = v1 with the same meaning + fields present only where the title has them (absent otherwise): per corporation
 # `loans` (titles with loans) and `interest` (in an operating round); `loans_left`; `national`; `trainless`; `merger` (a
-# merger round); and, for every title, `auction` (the bids in progress, absent when there are none).
+# merger round: the share dealing's lists only while a new major's shares are dealt); and, for every title, `auction`
+# (the bids in progress, absent when there are none).
 require_relative '/src/lib/engine'
 require 'json'
 
@@ -47,7 +48,8 @@ def merger_key(g)
   removing = r.respond_to?(:corporations_removing_tokens) ? r.corporations_removing_tokens : nil
   {
     'converted' => r.converted&.id, 'merge_type' => r.merge_type&.to_s, 'converts' => r.converts.map(&:id),
-    'dealing' => r.share_dealing_players.map(&:id), 'multiple' => r.share_dealing_multiple.map(&:id),
+    'dealing' => r.converted ? r.share_dealing_players.map(&:id) : [],
+    'multiple' => r.converted ? r.share_dealing_multiple.map(&:id) : [],
     'merging' => (merging || []).map(&:id), 'converting' => !!merge&.instance_variable_get(:@converting),
     'merge_major' => !!merge&.instance_variable_get(:@merge_major), 'removing' => removing&.first&.id
   }
@@ -63,7 +65,8 @@ def key(g, last)
     { 'id' => p.id, 'cash' => p.cash, 'shares' => shares, 'companies' => p.companies.map(&:id).sort,
       'bankrupt' => !!p.bankrupt }
   end
-  loans = g.corporations.any? { |c| g.maximum_loans(c).positive? }
+  # (base Game#maximum_loans is private: 0 for a title without loans)
+  loans = g.corporations.any? { |c| g.send(:maximum_loans, c).positive? }
   in_or = g.round.operating? && g.respond_to?(:loans_due_interest)
   corps = {}
   g.corporations.each do |c|
@@ -111,7 +114,7 @@ def key(g, last)
     out['national'] = {
       'tokens' => nat.tokens.select(&:used).map { |t| token_place(t) },
       'companies' => nat.companies.map(&:id).sort,
-      'reservations' => g.instance_variable_get(:@national_reservations) || []
+      'reservations' => (g.instance_variable_get(:@national_reservations) || []).dup
     }
   end
   out['trainless'] = (g.trainless_major || []).map(&:id) if g.respond_to?(:trainless_major)

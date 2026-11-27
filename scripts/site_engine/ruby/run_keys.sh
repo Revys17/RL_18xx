@@ -13,7 +13,7 @@ mkdir -p "$OUT"
 export CORPUS SITE RB SUB OUT
 ls "$CORPUS/$SUB"/*.json | xargs -n 40 | xargs -P "$J" -I{} bash -c '
   args=(); for f in {}; do args+=("/corpus/$SUB/$(basename "$f")"); done
-  timeout 3600 taskset -c 24-31,56-63 nice -n 19 docker run --rm --network none --cpuset-cpus 24-31,56-63 \
+  timeout 3600 taskset -c 24-31,56-63 nice -n 19 docker run --rm --network none --cpuset-cpus 24-31,56-63 --user "$(id -u):$(id -g)" \
     -e LOG_LEVEL=info -v "$SITE":/src:ro -v "$CORPUS":/corpus:ro -v "$RB":/rb:ro -v "$OUT":/out -w /src \
     18xx_rack:dev ruby /rb/keys_reference.rb /out "${args[@]}" > /dev/null 2>&1'
 echo done

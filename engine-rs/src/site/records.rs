@@ -60,6 +60,22 @@ impl BaseGame {
         list.push(OpInfo { turn, round, revenue, kind: kind.to_string(), no_run });
     }
 
+    /// `site_note_operated` for an operating round named by the caller (the site layer records what the engine does
+    /// without a hook: 1867's minors' automatic payout, docs/SITE_ENGINE_RS_1867.md §3.1).
+    pub(crate) fn site_note_operated_at(&mut self, corp: &str, turn: u32, round: u8, revenue: i32, kind: &str, no_run: bool) {
+        let Some(rec) = self.site.as_mut() else { return };
+        let list = rec.op_history.entry(corp.to_string()).or_default();
+        list.retain(|e| !(e.turn == turn && e.round == round));
+        list.push(OpInfo { turn, round, revenue, kind: kind.to_string(), no_run });
+    }
+
+    /// A corporation starts afresh (Ruby `reset_corporation`: a new Corporation, its operating history empty).
+    pub(crate) fn site_forget_operated(&mut self, corp: &str) {
+        if let Some(rec) = self.site.as_mut() {
+            rec.op_history.remove(corp);
+        }
+    }
+
     /// A round has finished (Ruby `transition_to_next_round!` / `end_game!` call `store_player_info`). Called only
     /// with `site_rules`.
     pub(crate) fn site_note_round_finished(&mut self) {

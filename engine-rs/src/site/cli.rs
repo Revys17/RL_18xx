@@ -22,7 +22,7 @@ pub fn version() -> Value {
         features.push("site-titles");
     }
     json!({"engine": "engine-rs", "commit": super::COMMIT, "api": super::API_VERSION, "key": super::KEY_VERSION,
-           "titles": ["1830"], "features": features})
+           "titles": super::TITLES, "features": features})
 }
 
 fn fail(code: i32, msg: impl Into<String>) -> (i32, Value) {
