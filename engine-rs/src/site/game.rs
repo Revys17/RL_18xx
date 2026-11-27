@@ -487,6 +487,17 @@ impl SiteGame {
             Vec::new()
         };
         let merger_before = matches!(self.game.round, crate::rounds::Round::Merger(_));
+        let converted_before = match &self.game.round {
+            crate::rounds::Round::Merger(s) => s.converted.clone(),
+            _ => None,
+        };
+        // a 1867 stock round's state before the action: a minor's auction under way, the pending home station's company
+        let stock_before = match &self.game.round {
+            crate::rounds::Round::Stock(s) if is_1867 => {
+                Some((s.bid_auction.is_some(), s.pending_home_tokens.first().map(|(sym, _)| sym.clone())))
+            }
+            _ => None,
+        };
         // the companies' owners' order before a 1867 merger (Ruby `Corporation#<=>`: price, column, row, name), keyed
         // by the owner's entity id
         let corp_ranks = (is_1867 && matches!(action, Action::Merge { .. })).then(|| {
@@ -516,8 +527,31 @@ impl SiteGame {
         // next_turn!, and the stock turn's current_actions are BuySellParShares's own)
         let key_after = self.turn_key();
         let by_company = a.get("entity_type").and_then(Value::as_str) == Some("company");
-        let stock_new = !by_company && matches!(&self.game.round, crate::rounds::Round::Stock(s) if !s.acted_this_turn);
-        if key_after != key_before || stock_new {
+        let stock_new = !is_1867 && !by_company && matches!(&self.game.round, crate::rounds::Round::Stock(s) if !s.acted_this_turn);
+        // 1867's stock round (Ruby next_turn!, once an action): a pass outside a minor's auction (after_process ->
+        // next_entity!), an auction settled (BuySellParShares#win_bid's goto_entity!), a won minor's home station
+        // placed (the step then has nothing left: next_entity!); the round's or the turn's change as everywhere. A
+        // minor's auction and its station put down when it goes up stay within the turn of the player who put it up.
+        let stock_1867 = is_1867
+            && stock_before.as_ref().is_some_and(|(auction, _)| {
+                let after_auction = matches!(&self.game.round, crate::rounds::Round::Stock(s) if s.bid_auction.is_some());
+                let pass_outside = matches!(action, Action::Pass { .. }) && !*auction;
+                let settled = (*auction || matches!(action, Action::CorporationBid { .. })) && !after_auction;
+                let won_station = matches!(action, Action::PlaceToken { .. })
+                    && stock_before.as_ref().and_then(|(_, pending)| pending.clone()).is_some_and(|sym| {
+                        self.game.corp_idx.get(sym.as_str()).is_some_and(|&ci| {
+                            let c = &self.game.corporations[ci];
+                            c.corp_type == crate::title::CorpType::Minor && c.owner_id.is_player()
+                        })
+                    });
+                pass_outside || settled || won_station
+            });
+        let key_changed = key_after != key_before
+            // 1867's merger round: a merger of minors done (Merge#finish_merge_to_major; a conversion starts no turn)
+            || (merger_before
+                && converted_before.is_none()
+                && matches!(&self.game.round, crate::rounds::Round::Merger(s) if s.converted.is_some() && !s.merge_type_convert));
+        if key_changed || stock_new || stock_1867 {
             self.turn_advanced = true;
             self.turn_actions.clear();
             self.turn_steps.clear();
@@ -672,7 +706,13 @@ impl SiteGame {
 
     /// What identifies whose turn it is (Ruby calls `next_turn!` when the round or its entity index changes).
     fn turn_key(&self) -> (u32, &'static str, u8, i64) {
-        let (_, idx) = super::view::round_order(self);
+        // (1867's merger round: its minors in turn, Ruby's @entity_index)
+        let idx = match &self.game.round {
+            crate::rounds::Round::Merger(s) => s.entity_index as i64,
+            // 1867's SingleItemAuction: a lot won moves the round on (goto_entity! + next_entity_index!), whoever wins
+            crate::rounds::Round::Auction(s) if s.single_item.is_some() => s.remaining_companies.len() as i64,
+            _ => super::view::round_order(self).1,
+        };
         let kind = self.game.round.round_type_str();
         (self.game.turn, kind, self.game.round.round_num(), idx)
     }

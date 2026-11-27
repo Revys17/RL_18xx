@@ -31,6 +31,8 @@ pub struct Stats {
     pub misaligned: usize,
     pub static_infos: usize,
     pub static_infos_equal: usize,
+    pub restarts: usize,
+    pub restarts_equal: usize,
     /// field path -> (count, first example)
     pub diffs: BTreeMap<String, (usize, String)>,
     pub log_diffs: BTreeMap<String, (usize, String)>,
@@ -50,6 +52,7 @@ impl Stats {
         println!("  tracks equal:    {}/{} ({:.2}%)", self.tracks_equal, self.tracks, pct(self.tracks_equal, self.tracks));
         println!("  menus equal:     {}/{} ({:.2}%)", self.menus_equal, self.menus, pct(self.menus_equal, self.menus));
         println!("  tile options equal: {}/{} ({:.2}%)", self.tile_opts_equal, self.tile_opts, pct(self.tile_opts_equal, self.tile_opts));
+        println!("  restart info equal: {}/{} ({:.2}%)", self.restarts_equal, self.restarts, pct(self.restarts_equal, self.restarts));
         println!("  auto routes: {} compared, {} equal revenue, {} Rust higher, {} Rust lower; recorded run above Rust's: {}",
             self.routes, self.routes_equal, self.routes_rust_higher, self.routes_rust_lower, self.routes_recorded_higher);
         println!("  log steps equal: {}/{} ({:.2}%), lines {}/{} ({:.2}%)", self.log_steps_equal, self.log_steps,
@@ -254,6 +257,18 @@ impl<'a> GameCompare<'a> {
                     stats.routes_recorded_higher += 1;
                     Stats::note(&mut stats.diffs, "routes.recorded>rust".into(), format!("{gid}@{}: recorded {rec} / rust {o}", gold.get("actionId").unwrap_or(&Value::Null)));
                 }
+            }
+        }
+        if let Some(gr) = gold.get("restart") {
+            stats.restarts += 1;
+            let mine = super::details::restart_info(g);
+            let mut d = Vec::new();
+            diff("restart", &mine, gr, &mut d);
+            if d.is_empty() {
+                stats.restarts_equal += 1;
+            }
+            for (p, ex) in d {
+                Stats::note(&mut stats.diffs, normalize(&p), format!("{gid}@{}: {ex}", gold.get("actionId").unwrap_or(&Value::Null)));
             }
         }
         if let Some(Value::Object(menus)) = gold.get("menus") {

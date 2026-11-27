@@ -27,7 +27,11 @@ pub fn meta(g: &SiteGame) -> Value {
     json!({
         "turn": g.game.turn,
         "round": super::view::round_info(g)["name"],
-        "acting": super::view::active_players(g),
+        "acting": if g.game.title == "1867" {
+            super::g1867::active_players(&mut g.game.clone_for_search())
+        } else {
+            super::view::active_players(g)
+        },
         "finished": g.finished(),
         "result": res,
         "manually_ended": if g.finished() { json!(g.manually_ended) } else { Value::Null },
@@ -41,8 +45,14 @@ pub fn last_run_info(g: &SiteGame, sym: Option<&str>) -> Value {
     use crate::rounds::OperatingStep as S;
     let offered = !matches!(&g.game.round, Round::Operating(s) if s.crowded_corps.is_empty() && matches!(s.step, S::RunRoutes | S::Dividend));
     let mut operators = Vec::new();
+    // Ruby operated_operators: the game's corporations (1867: Ruby's @corporations, in its order) that have operated
+    let corps: Vec<&crate::entities::Corporation> = if g.game.title == "1867" {
+        super::g1867::ruby_corporations(&g.game).into_iter().map(|i| &g.game.corporations[i]).collect()
+    } else {
+        g.game.corporations.iter().collect()
+    };
     if let Some(rec) = g.game.site.as_ref() {
-        for c in &g.game.corporations {
+        for c in corps {
             if let Some(e) = rec.op_history.get(&c.sym).and_then(|l| l.iter().max_by_key(|e| (e.turn, e.round))) {
                 operators.push(json!({"sym": c.sym, "kind": "corporation", "revenue": e.revenue}));
             }
@@ -134,8 +144,14 @@ pub fn program_info(g: &SiteGame, pid: u32) -> Value {
                             "owned": if owned.fract() == 0.0 { json!(owned as i64) } else { json!(owned) }}));
     }
     let mine = super::view::programs(g).and_then(|p| p.get(pid.to_string()).cloned()).unwrap_or(json!([]));
+    // Ruby available_programmed_actions (1867: ProgramMergerPass too)
+    let available = if g.game.title == "1867" {
+        json!(["program_merger_pass", "program_buy_shares", "program_share_pass"])
+    } else {
+        json!(["program_buy_shares", "program_share_pass"])
+    };
     json!({
-        "available": ["program_buy_shares", "program_share_pass"],
+        "available": available,
         "multiple": false,
         "forceUnconditional": false,
         "stock": matches!(g.game.round, Round::Stock(_)),

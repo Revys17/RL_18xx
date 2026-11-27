@@ -238,7 +238,22 @@ fn main() {
             let snap = engine_rs::site::view::snapshot(&g, g.current_action_id);
             let key = engine_rs::site::shadow::key_now(&mut g);
             let moves = engine_rs::site::g1867::debug_moves(&mut g);
-            println!("{}", json!({"snap": snap, "menus": menus, "key": key, "info": engine_rs::site::view::static_info(&g), "moves": moves}));
+            let details = engine_rs::site::details::details(&mut g, &json!(["info", "tiles", "sheet"])).unwrap_or(Value::Null);
+            let mut last = serde_json::Map::new();
+            let lr0 = engine_rs::site::details::last_run_info(&g, None);
+            for op in lr0.get("operators").and_then(Value::as_array).cloned().unwrap_or_default() {
+                if let Some(sym) = op.get("sym").and_then(Value::as_str) {
+                    last.insert(sym.to_string(), engine_rs::site::details::last_run_info(&g, Some(sym)));
+                }
+            }
+            last.insert(String::new(), lr0);
+            let mut programs = serde_json::Map::new();
+            for p in g.players.iter().map(|p| p.0).collect::<Vec<_>>() {
+                programs.insert(p.to_string(), engine_rs::site::details::program_info(&g, p));
+            }
+            println!("{}", json!({"snap": snap, "menus": menus, "key": key, "info": engine_rs::site::view::static_info(&g), "moves": moves,
+                "details": details, "lastRun": last, "programs": programs, "meta": engine_rs::site::details::meta(&g),
+                "restart": engine_rs::site::details::restart_info(&g)}));
             continue;
         }
         let golden = goldens.as_ref().and_then(|d| {
