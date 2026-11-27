@@ -754,7 +754,80 @@ golden, parity, acts, play, fallback, words_titles), `docs/RUST_ENGINE.md`.
 
 ## 13. The record
 
-- **2026-11-26, A0**: worktree and branch created from `site/engine-rs-1830` f6a9fe5; commit **9e06cad** pins the 1867
+- **2026-11-26, A0**: worktree and branch created from `site/engine-rs-1830` f6a9fe5; commit **9e06cad** (42ac72c after
+  the rebase below) pins the 1867
   neutrality walks (§7: digests equal under `site` and `python`, across processes, and on RL_18xx origin/master
   cd97116). The design probe (§2.2) and the wasm size measurement (§3.10) were made on a scratch copy of this branch;
   nothing else of 1867 is changed yet.
+
+### 13.1 Package A as built (2026-11-27)
+
+**Rebase.** `site/engine-rs-1867` rebased onto the polished `site/engine-rs-1830` **7bcc696** (X3's menu, the
+snapshot's `ending` / `auctioning`, §11.2 there): the pin and this doc became 42ac72c and 22922a2; both neutrality
+tests ran unchanged before any 1867 change and passed (1830: 60 walks, 74,106 moves; 1867: 24 walks, 32,050 moves,
+all finished; under `--features site` and `--features python`).
+
+**Commits** (oldest first, after the pin and the design): 1879856 **P2**; 50678a6 **V2**; d23c40c the corpus fetch
+by title and the reference Ruby key v2; 431ffeb **A1** (1867 loads and replays; key v2 for both titles); 843460b the
+build's titles; 20b1a4c **A2** (act / check through the generator, the step auto actions; the 1867 snapshot and
+StaticInfo); a4a08e4 **A3** (RawMenu facts, tile options, the exact router); 86556e3 turn starts, lastRun,
+programInfo, meta; 4caff61 §5.2 (Ruby's phase status table) and the 1867 site tests; d077343 the generated games and
+the Ruby live judge (§10.4); 907569f **A4** (log lines); d30120a act cases for 1867; 105f93f **P3** (the wasm clock);
+1d9d2e7 the merger's converts, each station's city, the docs. Outside `src/site`: P2, V2, P3 only (§5.3), each its own
+commit. No `site_rules` branch.
+
+**Package** (K2): `$RUST2/pkg/1d9d2e7b2fb2` (`pkg/current`): `version()` `{api: 2, key: 2, titles: ["1830",
+"1867"]}`; the wasm (`wasm,site-titles`) 1,879,310 bytes, 685,212 gzip (the 1830-only one: 1,482,966 / ~551k: the 1867
+generator, router and site layer are now linked in, +134 KB gzip); skeletons published on the way: 843460b04692 (A1),
+d30120a3311b, 105f93f625b6. `site_engine state|keys|act` take 1867 (exit 3: 2 players, `grid_market`).
+
+**API additions** (additive to K1/K3): RawMenu's 1867 facts (§3.5 "as built"); `act`'s `posted.auto_actions` (the
+predicted step passes, 1867); shadow key v2 (§6 "as built"); `site_replay --title`, `--dump <id>`, `--act-check`,
+`--generate N [--seed] [--moves] [--out] [--ruby-dead-ends]`; `scripts/site_engine/ruby/live_replay.rb`;
+`fetch_corpus.py --title`; `run_keys.sh` reads `CORPUS`.
+
+**Corpus** (§10.1): :9301 10 games (1218-1227), production 11 (24-34, the bot API's read-only export, files 600,
+deleted after the checks), fixtures 5 (the site's four + RL_18xx's `nationalization_cash`); 320 generated games.
+Opal goldens of the corpus were made in A's scratch with living-board's own `golden.cjs` machinery for `g_1867`
+(read-only use; C's official ones replace them).
+
+| Check | Result |
+|---|---|
+| Strict replay | 26 / 26 corpus games; 320 / 320 generated |
+| Key v2 = the reference Ruby key | :9301 2,677 / 2,677; production 6,441 / 6,442; fixtures 3,012 / 3,033 (21: old records whose runs carry no revenue, Ruby's key `null`); generated (as the server stored them) 361,305 / 361,813; 1830 147,037 / 147,037 (:9301), 4,759 / 4,759 (fixtures) |
+| Recorded moves accepted by act's check (the generator, Ruby's set) | 12,080 / 12,080 |
+| Predicted step auto actions = recorded | 11,829 / 11,933 (the 104: old fixture records made before the client posted these passes; :9301 and production all equal) |
+| Generated games judged by the site's Ruby move by move (`validate_auto_actions: true`, revenues stripped, as record_action) | 314 / 320 to the end; 0 runs repriced; the 6 stops are Ruby's: 3 × the opening auction with nobody able to bid (§5.4), 2 × MajorTrainless' phantom after an in-loop reset (§5.4), 1 × Ruby's stale graph cache (below). A first batch without the dead-end avoidance: 248 / 320, 71 of the 72 stops Ruby's stale operator after a MajorTrainless nationalization with majors queued (§5.4) |
+| Native = wasm (every step's JSON and key, `replay_digest`) | 346 / 346 (corpus + generated) |
+| Against the site's Opal (26 games, 12,149 positions) | snapshots 12,144; actions 12,104 / 12,123; tracks 1,726 / 1,726; menus 47,302 / 48,265; tile options 34,041 / 34,067; restartInfo 11,866; auto routes 1,383 compared: 1,352 equal, 31 above Opal's (its 10 s cut-off), 0 below; log lines 29,341 / 29,925 (98.05%), steps 10,770 |
+| 1830 unchanged | spike goldens: snapshots 82,083 / 82,083, menus 322,145 / 322,150, tile options 42,082, routes 7,562 equal, log lines 171,590 / 171,590; live set 3,908 / 3,908 everywhere |
+| Act cases (K11) | `$RUST2/acts/r1/cases.jsonl` (:9301 + fixtures, every 5th decision position): 7,248 cases, 6,995 accepted, 253 refused (247 depot trains listed with `short` the company can't pay, as 1830's); `acts/r1_prod` (production, 600, deleted with the export): 10,115 cases, 9,895 accepted |
+
+**Gate** at 1d9d2e7 (§10.6; under `taskset -c 24-31,56-63 nice -n 19`, `CUDA_VISIBLE_DEVICES=`): `cargo test --release
+--no-default-features --features python` 270 passed, 0 failed, 11 ignored (both neutrality pins: 1830 60 walks /
+74,106 moves, 1867 24 walks / 32,050 moves, unchanged); `--features site` 295 passed, 0 failed, 10 ignored; `cargo
+check --target wasm32-unknown-unknown --features wasm,site-titles` and `--features wasm` clean; default `cargo check`
+clean; `uv sync` in this worktree and the full `pytest tests/`: 1,822 passed, 7 skipped, 0 failed (21 min). No
+Python-vs-Rust parity test failed.
+
+**Ruby defects met** (§5.4 and one more; the site's Ruby is not changed here, the choice is Caleb's): the stale
+operator after a MajorTrainless nationalization with other majors queued (no later action matches: the game would
+be stuck on the live site); MajorTrainless' phantom after `event_minors_nationalized!`; the opening auction with
+nobody able to bid (`undefined method 'cash' for nil`); and **Ruby's stale graph cache**: Merge#mergeable_candidates
+(and Token's can_really_place_token?) read `@game.graph` without clearing it after stations moved, so Ruby auto-passes
+a minor that has merge candidates (`g.graph.clear` and Ruby lists them, as Rust does); on the live site a Rust page then
+sees a stored action with an extra pass and re-reads the game (the shadow reports it).
+
+**Known gaps** (Rust's, listed for B and C):
+- Key: a company with two stations in one multi-city hex (Montreal, Toronto) sometimes lists them in the other order
+  (`corps.*.tokens`: 1 production position, 505 generated positions in 7 games); a crowded company first in
+  DiscardTrain (1 generated position).
+- Menus vs Opal: 1867's parts are facts (C words them); Opal's par offers for minors in phase 4+ (Ruby starts minors
+  by bid: the generator offers none); an over-the-limit train from the president's other company (34 positions); one
+  hex where the generator refuses lays Opal's hand lists (26 options, prod 26@186: to be judged by Ruby in B's
+  verdicts).
+- Log: multi-minor merger results (shares dealt, closes, "merges into ... receiving", the token count), ReduceTokens'
+  "removes token from", an export on a phase change, nationalized minors' closes in some orders; the old fixtures'
+  runs without revenue.
+- restartInfo: one hotseat fixture whose action ids skip; 1830 game 22 (27 positions, a new comparison, unchanged code).
+- Programs' auto actions stay the server's (as step 1).
