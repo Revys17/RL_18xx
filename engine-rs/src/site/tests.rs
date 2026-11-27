@@ -493,3 +493,46 @@ fn key_v2_lists_the_1830_auction_bids() {
     assert!(a["bids"].as_array().is_some_and(|b| !b.is_empty()) || !a["lot"].is_null(), "{a}");
     assert!(a.get("dutch").is_none());
 }
+
+#[test]
+fn g1867_menus_train_cards_are_moves_act_accepts() {
+    // the train part of every acting player's menu at every position of the 1867 fixtures: each depot train it
+    // enables (`short` 0) and each trade-in the treasury pays is a move act's check accepts (the generator's room
+    // check: a company at its limit is offered no depot train), and no trade-in is listed at $0 or less (a 5+5E for
+    // a 2+2: Spender#spend refuses it)
+    for name in ["g1867_21268", "g1867_nationalization_cash"] {
+        let data = fixture(name);
+        let ids: Vec<i64> = data["actions"].as_array().unwrap().iter().filter_map(|a| a["id"].as_i64()).collect();
+        let mut g = SiteGame::load(&data).unwrap();
+        let (mut cards, mut exchanges) = (0, 0);
+        for id in ids {
+            g.run_to(Some(id));
+            if g.finished() || g.stopped.is_some() {
+                break;
+            }
+            let k = shadow::key_now(&mut g);
+            for pid in k["acting"].as_array().cloned().unwrap_or_default().iter().filter_map(Value::as_u64) {
+                let m = super::menu::menu(&mut g, pid as u32);
+                for t in m["trains"].as_array().cloned().unwrap_or_default() {
+                    if t["short"] == json!(0) {
+                        cards += 1;
+                        let r = super::g1867::act::check_move(&mut g.clone(), &t["action"]);
+                        assert!(r.is_ok(), "{name}@{id}: {} refused: {:?}", t["action"], r);
+                    }
+                }
+                let power = m["trainBuy"]["buyingPower"].as_i64().unwrap_or(0);
+                for x in m["trainBuy"]["exchanges"].as_array().cloned().unwrap_or_default() {
+                    let price = x["price"].as_i64().unwrap();
+                    assert!(price > 0, "{name}@{id}: trade-in at {price}: {}", x["action"]);
+                    if price <= power {
+                        exchanges += 1;
+                        let r = super::g1867::act::check_move(&mut g.clone(), &x["action"]);
+                        assert!(r.is_ok(), "{name}@{id}: {} refused: {:?}", x["action"], r);
+                    }
+                }
+            }
+        }
+        assert!(cards > 20, "{name}: {cards} train cards checked");
+        let _ = exchanges;
+    }
+}

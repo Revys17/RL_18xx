@@ -409,9 +409,13 @@ fn train_parts(g: &mut SiteGame, corp: &str, types: &[String], moves: &Moves, ou
     let must = types.iter().any(|t| t == "buy_train") && !types.iter().any(|t| t == "pass");
     let power = if must { full_power(g, ci) } else { cash };
     let depot = depot_trains(g);
+    // the generator's room check (`g67_gen_buy_train`: a train beyond the limit is never bought, only traded in):
+    // at its limit a company (phase 8, the step open for a trade-in) is offered no depot train, as act's check
+    // refuses one (Ruby's buy_train_action would take it and then ask for a discard; Opal's hand lists it)
+    let room = g.game.corporations[ci].trains.len() < g.game.corp_train_limit(ci);
     let mut trains = Vec::new();
     let mut seen: Vec<(String, i32)> = Vec::new();
-    for (id, name, price, discarded) in &depot {
+    for (id, name, price, discarded) in depot.iter().filter(|_| room) {
         if seen.contains(&(name.clone(), *price)) {
             continue;
         }
@@ -462,6 +466,11 @@ fn train_parts(g: &mut SiteGame, corp: &str, types: &[String], moves: &Moves, ou
                 let Some(dt) = g.game.depot.trains.iter().chain(g.game.depot.discarded.iter()).find(|t| &t.id == did) else { continue };
                 let Some((_, d)) = dt.discount.iter().find(|(n, _)| n == oname) else { continue };
                 let price = dprice - d;
+                // a 5+5E for a 2+2 "costs" $600 - $750: Ruby's discountable_trains_for lists it and Spender#spend
+                // refuses the negative amount; the generator never offers it (g67_gen_buy_train)
+                if price <= 0 {
+                    continue;
+                }
                 let key = format!("{oname}|{dname}|{price}");
                 if seen_ex.contains(&key) {
                     continue;
