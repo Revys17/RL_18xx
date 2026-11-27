@@ -276,6 +276,15 @@ In 1830 the flag feeds only the encoder's "operated" feature (`rl/encode/encode.
 Trains step, after its Dividend step), so no position changes: the neutrality digests are unchanged. Test:
 `site::tests::d_and_h_teleport_without_a_route_operates_the_company_in_every_mode` (17@246 with the flag cleared
 first, `site_rules` on and off; it fails without U1).
+### 4.7 Step 2 (1867): the edits outside `src/site`
+
+Listed function by function in docs/SITE_ENGINE_RS_1867.md §5.3 (branch `site/engine-rs-1867`): **P2** (`Cargo.toml`,
+`title/mod.rs` `all_titles`: the cfg arm `site-titles` registering 1830 and 1867, replacing `only-1830`), **V2**
+(`steps.rs` `blocking_step_entity`, `step_actions`: `fn` → `pub(crate) fn`), **P3** (`src/clock.rs`; `g1867/legal.rs`,
+`g1867/router.rs`: their timing counters read `crate::clock::Instant`, which is `std::time::Instant` on native and a
+zero-reading stand-in on wasm32, where std's panics). No `site_rules` branch; `site_interplayer_purchase_open` reads
+Ruby's phase status from a table in `src/site/rules.rs` (the review note; §5.2 there).
+
 ---
 
 ## 5. The server: shadow mode

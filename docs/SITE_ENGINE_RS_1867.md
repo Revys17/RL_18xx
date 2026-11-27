@@ -270,6 +270,22 @@ of a merger are named). The parts that today come from Opal already worded becom
 `unsupported` is empty for 1867 (any type left over is a bug, reported as in step 1). `programs` lists Ruby's
 `available_programmed_actions` (`program_merger_pass`, `program_buy_shares`, `program_share_pass`).
 
+**1867's facts as built** (A, `src/site/g1867/menu.rs`; the shared parts keep step 1's shapes and Opal's values;
+these replace Opal's already-worded parts, which C words in `words.ts`):
+
+| Key | Shape |
+|---|---|
+| `merger` | `{minor, phase: "start"\|"adding"\|"major", merging: [sym], partners: [{sym, price, action}], othersLeftOut: [{sym, owner, ownerName}], majors: [{sym, action}] (phase major), mode?: "convert"\|"merge" (phase major), par? (phase major: the conversion's or Merge#merged_par_price snapped to a par / par_2 cell), convert?: {par, action} (phase start, when `convert` is in types)}` |
+| `reduceTokens` | `{corp, issues: ["limit"] or ["limit", "sameHex"], options: [{hex, city (Ruby's city id), slot, owner (the token's company), action}]}` in Ruby's hex order |
+| `redeem` | `[{corp, percent, price, action}]` (RedeemShares) |
+| `nationalize` | `{corp, verb: "nationalize", action}` (MajorTrainless) |
+| `passKind` | `"merger_stay"` (Merge, no merger under way), `"merger_done"` (Done Adding), `"trainless_keep"` (MajorTrainless) |
+| `passNationalizes` | the company's sym when ending BuyTrain without a train nationalizes it (trainless and floated) |
+| `autoLoans` | `{corp, loans, max, per, interest: 5}` for every company actor; `per` 45 where the step counts the loans (Track; BuyTrain when it must buy), else 50 |
+| `tilePower` | cash + 45 × the loans still to take (Track) |
+| `trains[].loans` | `{n, per: 45}` for a depot train a must-buy company pays with loans |
+| `auctionStart` / `auction[].par` | `true` when a stock-round turn may put minors up; each minor lot `{sym, name, value: 0, target: "corporation", minBid, maxBid, buy: false, par: {prices (the minors' par cells, high to low), cap: 135}}` |
+
 ### 3.6 Tile options
 
 `tileOptions(hex, via?)` for 1867: the generator's lays on that hex (every tile, every rotation it takes), each
@@ -406,12 +422,17 @@ data only, listed here.)
 
 ### 5.3 Edits outside `src/site` (each its own commit, listed function by function)
 
-| # | File, item | Edit |
-|---|---|---|
-| P2 | `Cargo.toml`, `title/mod.rs` `all_titles` | the feature `site-titles` replacing `only-1830`: a cfg arm registering `[G1830, G1867]` (cfg only; without the feature, nothing changes) |
-| V2 | visibility only, if the site layer needs a private helper (`fn` → `pub(crate) fn`, bodies unchanged) | candidates: `merger_tokens_above_limits`, `merger_token_hex_count` (ReduceTokens' issues), `g1867_wire_tile_id`, `token_slot_for`; listed as made |
+**As built** (2026-11-27; each its own commit on `site/engine-rs-1867`, none touches a body the RL path runs
+differently on native):
 
-That is the whole list; anything else the build finds needed is proposed here first (the parent relays it).
+| # | Commit | File, item | Edit |
+|---|---|---|---|
+| P2 | 1879856 | `Cargo.toml` (feature `site-titles` in place of `only-1830`), `title/mod.rs` `all_titles` (its cfg arm registers `[G1830, G1867]`) | cfg only: without the feature the registry is unchanged. (The same commit renames the feature in the site's own `site/build-site.sh` and `src/site/cli.rs`.) |
+| V2 | 50678a6 | `steps.rs`: `BaseGame::blocking_step_entity`, `BaseGame::step_actions` | `fn` → `pub(crate) fn`, bodies unchanged (the site layer reads Ruby's active step, its entity and `step.actions(entity)` for 1867's key and menus) |
+| P3 | 105f93f | new `src/clock.rs`; `lib.rs` (`pub mod clock;`); `g1867/legal.rs` (`stats::start`, `stats::stop`, `g1867_candidates`, `g1867_validate`, the lay search's timings) and `g1867/router.rs` (`g1867_route_search`'s walk / combine / finish timings): `std::time::Instant` → `crate::clock::Instant` | `std::time::Instant::now` panics on wasm32-unknown-unknown, and the generator and the router read it unconditionally for their diagnostics counters, so the wasm aborted at the first 1867 menu. On native `crate::clock::Instant` **is** `std::time::Instant` (a re-export: same type, same readings); on wasm32 a stand-in reading zero. The readings feed only `stats` and `AutoRoutes.micros`. |
+
+V2's other candidates (`merger_tokens_above_limits`, `merger_token_hex_count`, `g1867_wire_tile_id`,
+`token_slot_for`) were not needed. No `site_rules` branch was added. Both neutrality pins pass at every commit.
 
 ### 5.4 Known Ruby / Rust differences left as they are
 
@@ -457,6 +478,26 @@ integers, ids as in v1. `v: 2`; rows whose versions differ are `skipped` (B and 
 
 Order of work: both sides on the corpus first (§10.2: B's `ruby_keys.rb` + A's `site_engine keys`, 1830 and 1867), then
 the live shadow (`ENGINE_SHADOW_TITLES=1830,1867` on :9301).
+
+**v2 as built** (A, 2026-11-27; the reference Ruby twin is `scripts/site_engine/ruby/keys_reference.rb`, B's
+`lib/engine_shadow.rb` must do the same):
+- `v` is 2 for every title. `loans` (and `loans_left`) where any corporation has `maximum_loans > 0`; base
+  `Game#maximum_loans` is **private** (`send`). `interest` only in an operating round, `loans_due_interest(corp)`
+  (a corporation reset by nationalization is a new object: 0).
+- `par` is Ruby's `par_price`, which is the **share price** for a company `always_market_price` (all of 1867's).
+- `national.reservations` is a **copy** of `@national_reservations` (a live array: serialising it later shows its
+  final state at every position).
+- `merger.dealing` / `multiple`: the round's lists **while `converted` is set**, else `[]` (Ruby keeps the last ones
+  after the dealing; v2 does not compare them then). `converts` and `merge_type` as Ruby's round state (the site layer
+  records them from the `merge` naming a major).
+- `auction.bids` sorted by (item, price, player); `lot` is the step's `@auctioning` (1830: the private with more than
+  one bid; 1867: the lot up, or the minor being auctioned); `dutch` only for 1867's `SingleItemAuction`; `auction` is
+  absent unless the active step is an auction with a lot or a bid (1867's HomeToken pending: absent).
+- 1867's `step` / `entity` / `actions`: G1867::Step::HomeToken's `active_entities` is the round's entity (in a stock
+  round the player who started the company), with `actions` `[]`; Track lists `lay_tile, pass` and BuyCompany /
+  BuyCompanyPreloan `buy_company, pass` whenever they are the active step; BuySellParShares lists the base actions,
+  `pass`, then `bid` (`bid, pass` when the base list is empty or during an auction).
+- `game_end_reason` for 1867: the latched trigger first in GAME_END_TIMING_PRIORITY (`final_phase` over `bank`).
 
 ---
 

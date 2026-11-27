@@ -148,6 +148,8 @@ pub struct SiteGame {
     /// 1867: the loans each company owed interest on in the last operating round (Ruby's `@interest`, which outlives
     /// the round; the engine keeps it in the round's state)
     pub interest: HashMap<String, u32>,
+    /// 1867: the city of each station (Ruby's `token.city`)
+    pub token_cities: super::g1867::TokenCities,
 }
 
 impl Clone for SiteGame {
@@ -189,6 +191,7 @@ impl Clone for SiteGame {
             turn_advanced: self.turn_advanced,
             merger: self.merger.clone(),
             interest: self.interest.clone(),
+            token_cities: self.token_cities.clone(),
         }
     }
 }
@@ -311,6 +314,7 @@ impl SiteGame {
             turn_advanced: false,
             merger: Default::default(),
             interest: HashMap::new(),
+            token_cities: Default::default(),
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -487,6 +491,23 @@ impl SiteGame {
             Vec::new()
         };
         let merger_before = matches!(self.game.round, crate::rounds::Round::Merger(_));
+        let slots_before = if is_1867 { super::g1867::slot_owners(&self.game) } else { HashMap::new() };
+        let ranks_before: HashMap<String, (i32, i32, u8, String)> = if is_1867 {
+            self.game
+                .corporations
+                .iter()
+                .map(|c| {
+                    let k = c.share_price.as_ref().map_or((i32::MAX, 0, 0, c.sym.clone()), |sp| (-sp.price, -(sp.column as i32), sp.row, c.name.clone()));
+                    (c.sym.clone(), k)
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let merge_state_before = match &self.game.round {
+            crate::rounds::Round::Merger(s) => Some((s.converting, s.merge_major)),
+            _ => None,
+        };
         let converted_before = match &self.game.round {
             crate::rounds::Round::Merger(s) => s.converted.clone(),
             _ => None,
@@ -514,7 +535,9 @@ impl SiteGame {
         self.engine_count += 1;
         if is_1867 {
             self.records_1867(&translated, &action, or_before, &parred_before);
-            self.merger.update(merger_before, &self.game.round);
+            self.merger.update(merge_state_before, &action, &self.game.round);
+            let rank = |sym: &str| ranks_before.get(sym).cloned().unwrap_or((i32::MAX, 0, 0, sym.to_string()));
+            self.token_cities.update(&slots_before, &rank, &self.game);
             if let crate::rounds::Round::Operating(s) = &self.game.round {
                 self.interest = s.interest_snapshot.clone();
             }

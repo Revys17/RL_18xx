@@ -72,6 +72,18 @@ pub fn ruby_entity(g: &SiteGame) -> Option<String> {
 /// A corporation's used tokens as "<hex>-<city index on its tile>" (Ruby's numbering), in token order.
 fn token_places(g: &SiteGame, sym: &str, tokens: &[crate::entities::Token]) -> Vec<String> {
     let mut out = Vec::new();
+    if g.game.title == "1867" {
+        // the site layer's record of each station's city (Ruby's token.city)
+        if let Some(list) = g.token_cities.map.get(sym) {
+            for (ti, t) in tokens.iter().enumerate().filter(|(_, t)| t.used) {
+                match list.get(ti).cloned().flatten() {
+                    Some((h, c)) => out.push(format!("{h}-{c}")),
+                    None => out.push(format!("{}-?", t.city_hex_id)),
+                }
+            }
+            return out;
+        }
+    }
     for t in tokens.iter().filter(|t| t.used) {
         let hex = &t.city_hex_id;
         let Some(h) = g.game.hex_ref(hex) else {
