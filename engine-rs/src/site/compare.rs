@@ -36,6 +36,8 @@ pub struct Stats {
     /// field path -> (count, first example)
     pub diffs: BTreeMap<String, (usize, String)>,
     pub log_diffs: BTreeMap<String, (usize, String)>,
+    /// the lines Rust writes that Opal's step doesn't (shape -> count, first example)
+    pub log_extra: BTreeMap<String, (usize, String)>,
 }
 
 impl Stats {
@@ -69,6 +71,12 @@ impl Stats {
         for (k, (n, ex)) in l.iter().take(40) {
             println!("    {n:6}  {k}   {}", ex.chars().take(160).collect::<String>());
         }
+        let mut x: Vec<_> = self.log_extra.iter().collect();
+        x.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        println!("  lines Rust writes that Opal's step doesn't ({}):", x.iter().map(|e| e.1 .0).sum::<usize>());
+        for (k, (n, ex)) in x.iter().take(40) {
+            println!("    {n:6}  {k}   {}", ex.chars().take(160).collect::<String>());
+        }
     }
 
     pub fn to_json(&self) -> Value {
@@ -85,7 +93,7 @@ impl Stats {
             "routesRustHigher": self.routes_rust_higher, "routesRustLower": self.routes_rust_lower, "recordedAboveRust": self.routes_recorded_higher, "logSteps": self.log_steps, "logStepsEqual": self.log_steps_equal,
             "logLines": self.log_lines, "logLinesEqual": self.log_lines_equal, "misaligned": self.misaligned,
             "staticInfos": self.static_infos, "staticInfosEqual": self.static_infos_equal,
-            "diffs": m(&self.diffs), "logDiffs": m(&self.log_diffs),
+            "diffs": m(&self.diffs), "logDiffs": m(&self.log_diffs), "logExtra": m(&self.log_extra),
         })
     }
 }
@@ -303,6 +311,18 @@ impl<'a> GameCompare<'a> {
             } else {
                 Stats::note(&mut stats.log_diffs, line_shape(line), format!("{gid}@{}: {line} | rust: {:?}", gold.get("actionId").unwrap_or(&Value::Null), mine));
             }
+        }
+        // SITE_LOG_DIFFS=<file>: every step whose lines differ, as JSON lines (a tool's view, nothing reads it back)
+        if mine != theirs.as_slice() {
+            if let Ok(path) = std::env::var("SITE_LOG_DIFFS") {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    let _ = writeln!(f, "{}", serde_json::json!({"gid": gid, "at": gold.get("actionId"), "opal": theirs, "rust": mine}));
+                }
+            }
+        }
+        for line in mine.iter().filter(|l| !theirs.contains(l)) {
+            Stats::note(&mut stats.log_extra, line_shape(line), format!("{gid}@{}: {line} | opal: {:?}", gold.get("actionId").unwrap_or(&Value::Null), theirs));
         }
     }
 

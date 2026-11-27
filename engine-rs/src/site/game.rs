@@ -150,6 +150,9 @@ pub struct SiteGame {
     pub interest: HashMap<String, u32>,
     /// 1867: the city of each station (Ruby's `token.city`)
     pub token_cities: super::g1867::TokenCities,
+    /// 1867's trains exported so far, (id, name): Ruby's depot keeps them (they rust with their type, "The Depot"
+    /// in the rust event); engine-rs drops them
+    pub exported: Vec<(String, String)>,
 }
 
 impl Clone for SiteGame {
@@ -192,6 +195,7 @@ impl Clone for SiteGame {
             merger: self.merger.clone(),
             interest: self.interest.clone(),
             token_cities: self.token_cities.clone(),
+            exported: self.exported.clone(),
         }
     }
 }
@@ -315,6 +319,7 @@ impl SiteGame {
             merger: Default::default(),
             interest: HashMap::new(),
             token_cities: Default::default(),
+            exported: Vec::new(),
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -491,6 +496,8 @@ impl SiteGame {
             Vec::new()
         };
         let merger_before = matches!(self.game.round, crate::rounds::Round::Merger(_));
+        let depot_before: Vec<(String, String)> =
+            if is_1867 { self.game.depot.trains.iter().map(|t| (t.id.clone(), t.name.clone())).collect() } else { Vec::new() };
         // the company operating while its LoanOperations is still ahead in its turn: if this action ends the operating
         // round, its LoanOperations ran inside it (G1867::Step::LoanOperations#skip!: interest, repayments, then
         // `calculate_corporation_interest`) and the round's own count went with the round
@@ -541,6 +548,16 @@ impl SiteGame {
             self.merger.update(merge_state_before, &action, &self.game.round);
             let rank = |sym: &str| ranks_before.get(sym).cloned().unwrap_or((i32::MAX, 0, 0, 0, sym.to_string()));
             self.token_cities.update(&slots_before, &rank, &self.game);
+            // the depot's trains gone without a buyer: exported (Depot#export!; a type's last trains rust only once
+            // sold, so nothing unsold rusts)
+            for (id, name) in depot_before {
+                let g = &self.game;
+                let gone = !g.depot.trains.iter().chain(g.depot.discarded.iter()).any(|t| t.id == id)
+                    && !g.corporations.iter().any(|c| c.trains.iter().any(|t| t.id == id));
+                if gone {
+                    self.exported.push((id, name));
+                }
+            }
             // the last station a merged major takes off (Ruby ReduceTokens#move_tokens_to_surviving): its tokens in use
             // first, in their order, the others after them
             if let Action::RemoveToken { entity_id, .. } = &action {
@@ -603,6 +620,9 @@ impl SiteGame {
         if let Some(b) = log_before {
             let mut lines = super::log::explain(self, &b, a);
             lines.extend(super::log::turn_start(self, &b));
+            if !was_finished && self.game.finished {
+                lines.extend(super::log::game_end_1867(self, &b));
+            }
             for l in lines {
                 self.log_push(l);
             }
