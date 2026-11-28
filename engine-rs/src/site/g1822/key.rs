@@ -34,11 +34,12 @@ fn token_places(g: &SiteGame, sym: &str) -> Vec<String> {
             out.push(format!("{hex}-?"));
             continue;
         };
+        // (a city's tokens: its slots' and its extra ones, Ruby `City#extra_tokens`: 1822CA's P10 Winnipeg token)
+        let held = |c: &crate::graph::City| c.tokens.iter().flatten().chain(c.extra_tokens.iter()).cloned().collect::<Vec<_>>();
         let idx = h.tile.cities.iter().enumerate().position(|(k, c)| {
-            !seen.contains(&(hex.clone(), k))
-                && c.tokens.iter().flatten().any(|x| x.corporation_id == sym && x.token_type == t.token_type)
+            !seen.contains(&(hex.clone(), k)) && held(c).iter().any(|x| x.corporation_id == sym && x.token_type == t.token_type)
         });
-        let idx = idx.or_else(|| h.tile.cities.iter().position(|c| c.tokens.iter().flatten().any(|x| x.corporation_id == sym)));
+        let idx = idx.or_else(|| h.tile.cities.iter().position(|c| held(c).iter().any(|x| x.corporation_id == sym)));
         match idx {
             Some(k) => {
                 seen.push((hex.clone(), k));
@@ -98,7 +99,14 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
     let mut corps = Map::new();
     for c in members.iter().map(|&i| &game.corporations[i]) {
         let sp = c.share_price.as_ref();
-        let ipo: u32 = c.shares.iter().filter(|s| s.owner == EntityId::ipo(&c.sym) || s.owner == EntityId::corporation(&c.sym)).map(|s| s.percent as u32).sum();
+        // (Ruby `ipo_shares`: the IPO's and the treasury's, and shares not issued yet, which the engine keeps unowned:
+        // an unsold minor's 100 %)
+        let ipo: u32 = c
+            .shares
+            .iter()
+            .filter(|s| s.owner == EntityId::ipo(&c.sym) || s.owner == EntityId::corporation(&c.sym) || s.owner.is_none())
+            .map(|s| s.percent as u32)
+            .sum();
         let market: u32 = c.shares.iter().filter(|s| s.owner.is_market()).map(|s| s.percent as u32).sum();
         let ce = EntityId::corporation(&c.sym);
         let mut companies: Vec<String> = game.companies.iter().filter(|m| m.owner == ce && !m.closed).map(|m| m.sym.clone()).collect();

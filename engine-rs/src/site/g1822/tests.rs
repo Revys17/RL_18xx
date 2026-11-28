@@ -257,3 +257,32 @@ fn print_fact_examples() {
         while !g.done() && g.process_next().is_none() {}
     }
 }
+
+/// Three key fields rl18xx-next's Ruby side (`lib/engine_shadow.rb`, step 4 package B) found differing on the
+/// fixtures: an unsold minor's shares are its IPO's (Ruby `ipo_shares`: 100, the engine keeps them unowned until
+/// issued), 1822CA's P10 token sits in its Winnipeg city as an extra token (Ruby `City#extra_tokens`), and a
+/// DiscardTrain step's acting player is the first crowded company's president only (`crowded_corps.take(1)`).
+#[test]
+fn key_follows_rubys_ipo_extra_tokens_and_discard_turn() {
+    let data = json!({"id": 7, "title": "1822", "settings": {"seed": 5}, "players": [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}, {"id": 3, "name": "C"}], "actions": []});
+    let mut g = SiteGame::load(&data).unwrap();
+    let k = super::key::key(&mut g, None);
+    assert_eq!(k["corps"]["1"]["ipo"], json!(100));
+    assert_eq!(k["corps"]["1"]["market"], json!(0));
+
+    let at = |name: &str, upto: i64| {
+        let data = super::super::cli::truncate(&fixture(name), Some(upto));
+        let mut g = SiteGame::load(&data).unwrap();
+        g.run_to(None);
+        assert!(g.stopped.is_none(), "{name} @{upto}: {:?}", g.stopped);
+        let last = data["actions"].as_array().unwrap().last().cloned();
+        super::key::key(&mut g, last.as_ref())
+    };
+    // P10's place_token for GT in W3's city 1 (1822CA_game_end_bank @746)
+    let k = at("1822CA_game_end_bank", 746);
+    assert_eq!(k["corps"]["GT"]["tokens"], json!(["AC21-1", "N16-1"]));
+    // two crowded companies of two presidents: the first one's president acts (1822_discard_trains_after_sr_export @583)
+    let k = at("1822_discard_trains_after_sr_export", 583);
+    assert_eq!(k["step"], json!("DiscardTrain"));
+    assert_eq!(k["acting"], json!([4035]));
+}

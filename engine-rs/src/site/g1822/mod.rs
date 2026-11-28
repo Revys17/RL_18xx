@@ -177,23 +177,13 @@ pub fn acting_for(game: &BaseGame, e: &Ent) -> Option<u32> {
     }
 }
 
-/// Ruby `active_players_id`, as site ids: the active step's active entities' players (DiscardTrain: every crowded
-/// company's president, in Ruby's `crowded_corps` order; elsewhere the step's current entity's).
+/// Ruby `active_players_id`, as site ids: the active step's active entities' players. (DiscardTrain's are
+/// `crowded_corps.take(1)`, Engine::Step::DiscardTrain#active_entities: the first crowded company's president only,
+/// as everywhere else the step's current entity's. Ruby's view lets another crowded company discard first, which the
+/// generator doesn't offer and `act` refuses: docs/SITE_ENGINE_RS_1822.md §2.3 G3.)
 pub fn active_players(g: &SiteGame) -> Vec<u32> {
     let game = &g.game;
-    let Some((_, step, ent)) = active(game) else { return Vec::new() };
-    let mut out: Vec<u32> = Vec::new();
-    if step == Step::DiscardTrain {
-        for c in game.g1822_crowded_corps() {
-            if let Some(p) = corp_owner(game, &c) {
-                let s = g.site_id(p);
-                if !out.contains(&s) {
-                    out.push(s);
-                }
-            }
-        }
-        return out;
-    }
+    let Some((_, _, ent)) = active(game) else { return Vec::new() };
     acting_for(game, &ent).map(|p| g.site_id(p)).into_iter().collect()
 }
 
