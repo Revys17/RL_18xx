@@ -489,6 +489,16 @@ impl SiteGame {
             self.acting_at_end = Some(super::authority::ruby_active_players(self));
             self.manually_ended = true;
             self.game.end_game();
+            if self.game.g1822.is_some() {
+                // (end_game!'s store_player_info in the site's ids, the family's round names: G1822's Choices)
+                let (short, offset) = (super::g1822::round_short(&self.game), self.seat_offset);
+                if let Some(e) = self.game.site.as_mut().and_then(|r| r.player_history.last_mut()) {
+                    e.round = short.to_string();
+                    for v in e.values.iter_mut() {
+                        v.0 = v.0.saturating_sub(offset);
+                    }
+                }
+            }
             self.log_game_over();
             return Ok(());
         }
