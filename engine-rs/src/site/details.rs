@@ -128,6 +128,17 @@ pub fn details(g: &mut SiteGame, parts: &Value) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
+/// Ruby `Corporation#operated?` (1867): its `operating_history` has an entry, i.e. its dividend step has run (the
+/// site's records; engine-rs's `ever_operated` without them). A major formed from a minor (a conversion or a
+/// merger) or reset by nationalization is a new object in Ruby: it hasn't operated until its own first dividend,
+/// whatever its minors did.
+pub(crate) fn operated_1867(game: &crate::game::BaseGame, c: &crate::entities::Corporation) -> bool {
+    match game.site.as_ref() {
+        Some(r) => r.op_history.get(&c.sym).is_some_and(|l| !l.is_empty()),
+        None => c.ever_operated,
+    }
+}
+
 /// Ruby `Game#liquidity(player)` (the Spreadsheet's Liquidity column, docs/SITE_ENGINE_RS_STEP3.md §10): the cash
 /// alone before 1830's second stock round (`sellable_turn?`); else the cash and, for each company the player holds
 /// shares of (1867: one that has operated, `SELL_AFTER :operate`), the dearest bundle Ruby's `bundles_for_corporation`
@@ -149,11 +160,8 @@ pub fn liquidity(g: &SiteGame, pid: u32) -> i32 {
         if shares.is_empty() || c.ipo_price.is_none() || c.closed {
             continue;
         }
-        if is_1867 {
-            let operated = game.site.as_ref().and_then(|r| r.op_history.get(&c.sym)).is_some_and(|l| !l.is_empty()) || c.ever_operated;
-            if !operated {
-                continue;
-            }
+        if is_1867 && !operated_1867(game, c) {
+            continue;
         }
         let Some(price) = c.share_price.as_ref().map(|s| s.price) else { continue };
         shares.sort_by_key(|s| (s.president as u8, s.percent));

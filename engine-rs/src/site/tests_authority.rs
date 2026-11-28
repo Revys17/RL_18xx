@@ -246,3 +246,25 @@ fn a_minor_won_at_auction_stops_a_share_pass_program() {
     assert!(authority::decide(&mut g, &action(&data, 390), None, 1_800_000_000).is_ok());
 }
 
+#[test]
+fn the_bot_view_types_a_player_whose_id_is_a_private_s() {
+    // 1867 has a private named "3": a player whose id is 3 is still a player (routes/bot.rb's entity type)
+    fn renumber(v: &mut Value) {
+        match v {
+            Value::Number(n) if n.as_u64() == Some(6177) => *v = json!(3),
+            Value::Array(xs) => xs.iter_mut().for_each(renumber),
+            Value::Object(m) => m.values_mut().for_each(renumber),
+            _ => {}
+        }
+    }
+    let mut data = fixture("g1867_nationalization_cash");
+    renumber(&mut data);
+    let mut g = before(&data, 389);
+    assert!(g.game.company_idx.contains_key("3"));
+    let v = authority::bot_view(&mut g);
+    assert_eq!(v["entity"], json!({"id": 3, "type": "player", "player": 3}), "{v}");
+    // and a company's turn the company's (379: AE in the merger round)
+    let mut g = before(&data, 379);
+    let v = authority::bot_view(&mut g);
+    assert_eq!(v["entity"], json!({"id": "AE", "type": "corporation", "player": 16972}), "{v}");
+}

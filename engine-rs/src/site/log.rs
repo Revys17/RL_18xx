@@ -22,9 +22,16 @@ pub struct Before {
     /// The operating company's Buy Trains step has acted this turn (bought a train, or sold shares to): Ruby's
     /// step then never logs its skip
     buy_train_acted: bool,
+    /// 1867: what the move's lay costs (`lay_cost_1867` on the map before it), for a lay
+    lay_cost: Option<i32>,
 }
 
-pub fn before(g: &SiteGame) -> Before {
+pub fn before(g: &SiteGame, raw: &Value) -> Before {
+    let lay_cost = (g.game.title == "1867" && raw.get("type").and_then(Value::as_str) == Some("lay_tile")).then(|| {
+        let s = |k: &str| raw.get(k).and_then(Value::as_str).unwrap_or("");
+        let rot = raw.get("rotation").and_then(Value::as_u64).unwrap_or(0) as u8;
+        lay_cost_1867(&g.game, s("hex"), s("tile"), rot)
+    });
     // the position before without the map (the log reads the map only after the move)
     let mut game = g.game.clone_for_search_without_log();
     game.hexes = Vec::new();
@@ -41,7 +48,7 @@ pub fn before(g: &SiteGame) -> Before {
     let sold = g.turn_actions.iter().filter(own).any(|a| a.get("type").and_then(Value::as_str) == Some("sell_shares"));
     let rounds_before = g.game.site.as_ref().map_or(0, |r| r.player_history.len());
     let buy_train_acted = g.turn_acted_at(Some("buy_train"), "BuyTrain") || g.turn_acted_at(Some("sell_shares"), "BuyTrain");
-    Before { auctioning: game.auctioning_company(), bids, turn_acted: acted, turn_bought: bought, turn_sold: sold, rounds_before, buy_train_acted, game }
+    Before { auctioning: game.auctioning_company(), bids, turn_acted: acted, turn_bought: bought, turn_sold: sold, rounds_before, buy_train_acted, lay_cost, game }
 }
 
 fn pname(game: &BaseGame, pid: u32) -> String {
@@ -482,6 +489,21 @@ thread_local! {
     static MOVE_LOANS: std::cell::RefCell<(String, u32)> = const { std::cell::RefCell::new((String::new(), 0)) };
     /// The title whose step list the log walks (set by `explain` / `turn_start`): 1830's unless 1867's
     static IS_1867: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// 1867: what the move's lay cost a company its LoanOperations then nationalized inside the same move (the cash
+    /// it had left for the interest, `interest_unpaid!`'s "only has")
+    static MOVE_SPENT: std::cell::RefCell<(String, i32)> = const { std::cell::RefCell::new((String::new(), 0)) };
+}
+
+/// 1867: what a lay costs on `game` (Ruby `Tracker#lay_tile`'s upgrade cost + the borders it completes + the lay
+/// slot's own cost: the second lay's $20), as the engine charges it (`or_process_lay_tile`).
+fn lay_cost_1867(bg: &BaseGame, hex: &str, tile: &str, rotation: u8) -> i32 {
+    let base = tile.split('-').next().unwrap_or(tile);
+    let terrain: i32 = bg.hex_ref(hex).map_or(0, |h| h.tile.upgrades.iter().map(|u| u.cost).sum());
+    let slot = match &bg.round {
+        Round::Operating(s) => bg.title_def().tile_lays().get(s.num_laid_track as usize).map_or(0, |l| l.cost),
+        _ => 0,
+    };
+    terrain + slot + bg.tile_border_cost(hex, base, rotation).0
 }
 
 fn steps_now() -> &'static [S] {
@@ -544,7 +566,8 @@ fn skips_with(g: &SiteGame, b: &BaseGame, corp: &str, from: usize, to: usize, ru
                     out.push(format!("{corp} pays ${} interest for  {due} loan{}", 5 * due, if due == 1 { "" } else { "s" }));
                 } else if due > 0 && reset {
                     // LoanOperations#interest_unpaid!: what it owes and has, then nationalize! (G1867 nationalizes it)
-                    let has = b.corp_idx.get(corp).map_or(0, |&i| b.corporations[i].cash);
+                    let spent = MOVE_SPENT.with(|c| { let m = c.borrow(); if m.0 == corp { m.1 } else { 0 } });
+                    let has = b.corp_idx.get(corp).map_or(0, |&i| b.corporations[i].cash) - spent;
                     out.push(format!("{corp} owes ${} in loan interest but only has ${has}", 5 * due));
                     nationalize_lines(g, b, corp, out);
                 }
@@ -599,6 +622,7 @@ fn skips_with(g: &SiteGame, b: &BaseGame, corp: &str, from: usize, to: usize, ru
 /// The lines of one processed action (`raw`: the site JSON as recorded).
 pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
     IS_1867.with(|c| c.set(g.game.title == "1867"));
+    MOVE_SPENT.with(|c| *c.borrow_mut() = (String::new(), 0));
     let a = &g.game;
     let bg = &b.game;
     let mut out = Vec::new();
@@ -743,13 +767,23 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             let name = super::json::tile_name(tile).unwrap_or(tile);
             let rot = raw.get("rotation").and_then(Value::as_i64).unwrap_or(0);
             let corp = g.operator_of(&ent);
-            let spent = spent_by(bg, a, &corp);
+            // (a company nationalized inside the move, its LoanOperations unable to pay the interest: its cash and
+            // loans went with it, so the lay's cost is the lay's own)
+            let nationalized = a.title == "1867"
+                && bg.corp_idx.contains_key(corp.as_str())
+                && a.corp_idx.get(corp.as_str()).is_none_or(|&i| a.corporations[i].closed || a.corporations[i].ipo_price.is_none());
+            let spent = if nationalized { b.lay_cost.unwrap_or(0) } else { spent_by(bg, a, &corp) };
+            if nationalized {
+                MOVE_SPENT.with(|c| *c.borrow_mut() = (corp.clone(), spent));
+            }
             let spend = if spent > 0 { format!("spends ${spent} and ") } else { String::new() };
             // Ruby Tracker#pay_tile_cost!: a private's lay names it, "C&O (CS) lays tile ..."
             let via = if corp != ent { format!(" ({ent})") } else { String::new() };
             out.push(format!("{corp}{via} {spend}lays tile #{name} with rotation {rot} on {}", hex_desc(a, hex)));
-            // G1867::Game#place_639_token: Montreal's green tile takes the national's reserved station
-            if a.title == "1867" {
+            // G1867::Game#place_639_token: Montreal's green tile takes the national's reserved station (G1867's
+            // Track step calls it for tile 639 only; a station the national gets from a company nationalized inside
+            // this move is nationalize!'s, which writes no line)
+            if a.title == "1867" && name == "639" {
                 let used = |game: &BaseGame| game.corp_idx.get("CN").map_or(0, |&i| game.corporations[i].tokens.iter().filter(|t| t.used).count());
                 if used(a) > used(bg) {
                     let place = LOCATION_NAMES_1867.iter().find(|(h, _)| *h == hex).map_or(hex, |x| x.1);
@@ -1072,10 +1106,22 @@ pub fn explain(g: &SiteGame, b: &Before, raw: &Value) -> Vec<String> {
             bg.corp_idx.get(corp.as_str()).map_or(0, |&i| bg.corporations[i].loans),
             a.corp_idx.get(corp.as_str()).map_or(0, |&i| a.corporations[i].loans),
         );
-        for _ in l0..l1 {
+        // (a lay takes only what it costs beyond the cash: AutomaticLoan#try_take_loan's loop; the rest of the loans
+        // were its LoanOperations', run inside the move: pay_interest!'s, written with the interest)
+        let mut taken = l1.saturating_sub(l0);
+        if let Some(cost) = b.lay_cost {
+            let mut cash = bg.corp_idx.get(corp.as_str()).map_or(0, |&i| bg.corporations[i].cash);
+            let mut need = 0;
+            while cash < cost && need < taken {
+                cash += 45;
+                need += 1;
+            }
+            taken = need;
+        }
+        for _ in 0..taken {
             out.insert(n, format!("{corp} takes a loan and receives $45"));
         }
-        MOVE_LOANS.with(|c| *c.borrow_mut() = (corp.clone(), l1.saturating_sub(l0)));
+        MOVE_LOANS.with(|c| *c.borrow_mut() = (corp.clone(), taken));
     }
     if t == "sell_shares" {
         let shares = raw.get("shares").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -1300,6 +1346,12 @@ fn phase_block(g: &SiteGame, b: &Before, raw: &Value, exported: Option<&str>, ou
             for (id, name) in &g.exported {
                 if rusting.contains(&name.as_str()) {
                     held.push((id.clone(), name.clone(), "The Depot".to_string()));
+                }
+            }
+            // and a nationalized company's trains, still its own in Ruby (SiteGame::orphan_trains)
+            for (id, name, owner) in &g.orphan_trains {
+                if rusting.contains(&name.as_str()) {
+                    held.push((id.clone(), name.clone(), owner.clone()));
                 }
             }
         }

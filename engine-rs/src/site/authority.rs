@@ -457,16 +457,23 @@ pub fn bot_view(g: &mut SiteGame) -> Value {
         return out;
     }
     let is_1867 = g.game.title == "1867";
-    let (entity, step, actions) = if is_1867 {
+    // the step's entity, and whether it is a player (1867's step says so: its private "3" and a player whose id is 3
+    // are both "3" as strings; 1830's privates have letters)
+    let (entity, is_player, step, actions) = if is_1867 {
         let active = super::g1867::active_step(&mut g.game);
         let actions = super::g1867::ruby_actions(&mut g.game);
-        (active.as_ref().map(|(_, e)| super::g1867::entity_id(e)), active.map(|(k, _)| super::g1867::step_class(k).to_string()), actions)
+        let is_player = matches!(active.as_ref().map(|(_, e)| e), Some(crate::steps::StepEntity::Player(_)));
+        (active.as_ref().map(|(_, e)| super::g1867::entity_id(e)), is_player, active.map(|(k, _)| super::g1867::step_class(k).to_string()), actions)
     } else {
-        (super::shadow::ruby_entity(g), super::shadow::ruby_step_class(g).map(str::to_string), super::shadow::ruby_actions(g))
+        let e = super::shadow::ruby_entity(g);
+        let is_player = e.as_deref().and_then(|x| x.parse::<u32>().ok()).is_some_and(|p| g.players.iter().any(|x| x.0 == p));
+        (e, is_player, super::shadow::ruby_step_class(g).map(str::to_string), super::shadow::ruby_actions(g))
     };
     let Some(entity) = entity else { return out };
     let game = &g.game;
-    let (etype, player) = if game.corp_idx.contains_key(entity.as_str()) {
+    let (etype, player) = if is_player {
+        ("player", entity.parse::<u32>().ok())
+    } else if game.corp_idx.contains_key(entity.as_str()) {
         let ci = game.corp_idx[entity.as_str()];
         let c = &game.corporations[ci];
         ("corporation", c.owner_id.player_id().or_else(|| c.president_id()))

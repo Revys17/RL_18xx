@@ -154,6 +154,11 @@ pub struct SiteGame {
     /// 1867's trains exported so far, (id, name): Ruby's depot keeps them (they rust with their type, "The Depot"
     /// in the rust event); engine-rs drops them
     pub exported: Vec<(String, String)>,
+    /// 1867's trains of a company nationalized while holding them, (id, name, company): Ruby's `close_corporation`
+    /// (a minor: `CLOSED_CORP_TRAINS_REMOVED` only makes them unbuyable) and `reset_corporation` (a major: the old
+    /// object keeps them) leave them owned by it, so they rust with their type under its name ("AE x2" in the rust
+    /// event); engine-rs drops them
+    pub orphan_trains: Vec<(String, String, String)>,
     /// Ruby's `@round.players_history` of the stock round in progress (the Programmer's shenanigan checks,
     /// docs/SITE_ENGINE_RS_STEP3.md §5.3)
     pub stock_history: super::programs::StockHistory,
@@ -209,6 +214,7 @@ impl Clone for SiteGame {
             interest: self.interest.clone(),
             token_cities: self.token_cities.clone(),
             exported: self.exported.clone(),
+            orphan_trains: self.orphan_trains.clone(),
             stock_history: self.stock_history.clone(),
             program_meta: self.program_meta.clone(),
             acting_at_end: self.acting_at_end.clone(),
@@ -337,6 +343,7 @@ impl SiteGame {
             interest: HashMap::new(),
             token_cities: Default::default(),
             exported: Vec::new(),
+            orphan_trains: Vec::new(),
             stock_history: Default::default(),
             program_meta: BTreeMap::new(),
             acting_at_end: None,
@@ -511,7 +518,7 @@ impl SiteGame {
         let tr_before = self.turn_round();
         let was_finished = self.game.finished;
         // the log's view of the position before (a copy without the map and the records)
-        let log_before = self.site_log.then(|| super::log::before(self));
+        let log_before = self.site_log.then(|| super::log::before(self, a));
         let key_before = self.turn_key();
         let step_before = self.game.active_step_type();
         let rounds_before = self.finished_rounds();
@@ -528,6 +535,12 @@ impl SiteGame {
         let merger_before = matches!(self.game.round, crate::rounds::Round::Merger(_));
         let depot_before: Vec<(String, String)> =
             if is_1867 { self.game.depot.trains.iter().map(|t| (t.id.clone(), t.name.clone())).collect() } else { Vec::new() };
+        let corp_trains_before: Vec<(String, String, String)> = if is_1867 {
+            self.game.corporations.iter().flat_map(|c| c.trains.iter().map(|t| (t.id.clone(), t.name.clone(), c.sym.clone()))).collect()
+        } else {
+            Vec::new()
+        };
+        let phase_before = self.game.phase.name.clone();
         // the company operating while its LoanOperations is still ahead in its turn: if this action ends the operating
         // round, its LoanOperations ran inside it (G1867::Step::LoanOperations#skip!: interest, repayments, then
         // `calculate_corporation_interest`) and the round's own count went with the round
@@ -595,6 +608,26 @@ impl SiteGame {
                     && !g.corporations.iter().any(|c| c.trains.iter().any(|t| t.id == id));
                 if gone {
                     self.exported.push((id, name));
+                }
+            }
+            // a company's trains gone with it (nationalized: closed or reset), not rusted by this move's new phase
+            let rusting: Vec<&str> = if self.game.phase.name != phase_before {
+                let on = self.game.title_def().phases().into_iter().find(|p| p.name == self.game.phase.name).and_then(|p| p.on);
+                self.game.title_def().trains().iter().filter(|t| on.is_some() && t.rusts_on == on).map(|t| t.name).collect()
+            } else {
+                Vec::new()
+            };
+            for (id, name, sym) in corp_trains_before {
+                let g = &self.game;
+                // (a company still running keeps whatever it hasn't sold, and what it sold is someone's)
+                let alive = g.corp_idx.get(sym.as_str()).is_some_and(|&ci| !g.corporations[ci].closed && g.corporations[ci].ipo_price.is_some());
+                if alive {
+                    continue;
+                }
+                let gone = !g.depot.trains.iter().chain(g.depot.discarded.iter()).any(|t| t.id == id)
+                    && !g.corporations.iter().any(|c| c.trains.iter().any(|t| t.id == id));
+                if gone && !rusting.contains(&name.as_str()) && !self.orphan_trains.iter().any(|o| o.0 == id) {
+                    self.orphan_trains.push((id, name, sym));
                 }
             }
             // the last station a merged major takes off (Ruby ReduceTokens#move_tokens_to_surviving): its tokens in use

@@ -202,8 +202,7 @@ fn percent_of(g: &SiteGame, holder: &crate::entities::EntityId, corp: &str) -> i
 /// after the first stock round; 1867 (`:operate`) once the company has operated.
 fn sale_timing(g: &SiteGame, corp: &str) -> bool {
     if g.game.title == "1867" {
-        let rec = g.game.site.as_ref().and_then(|r| r.op_history.get(corp)).is_some_and(|l| !l.is_empty());
-        rec || g.game.corp_idx.get(corp).is_some_and(|&ci| g.game.corporations[ci].ever_operated)
+        g.game.corp_idx.get(corp).is_some_and(|&ci| super::details::operated_1867(&g.game, &g.game.corporations[ci]))
     } else {
         g.game.turn > 1
     }

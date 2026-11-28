@@ -281,13 +281,24 @@ fn track_parts(g: &mut SiteGame, corp: &str, moves: &Moves, out: &mut Map<String
         }
     }
     // hexes with a legal lay the company can't pay for even with its loans: the generator on a copy whose treasury
-    // is topped up, less the real set
+    // is topped up, less the real set; each with its cheapest lay's cost (the terrain, the second lay's $20 and the
+    // water borders the new track completes, as the engine charges them)
     let mut rich = g.game.clone_for_search();
     rich.corporations[ci].cash += 100_000;
+    let mut rich_cost: Vec<(String, i32)> = Vec::new();
     for m in rich.g1867_legal_moves_with(CrossPlayerPolicy::RULES) {
-        if let Action::LayTile { hex_id, .. } = &m.action {
-            if !legal.contains(hex_id) {
-                legal.push(hex_id.clone());
+        if let Action::LayTile { hex_id, tile_id, rotation, .. } = &m.action {
+            if legal.contains(hex_id) && !rich_cost.iter().any(|x| &x.0 == hex_id) {
+                continue;
+            }
+            let base = tile_id.split('-').next().unwrap_or(tile_id);
+            let cost = m1::terrain_of(g, hex_id).0 + fee + g.game.tile_border_cost(hex_id, base, *rotation).0;
+            match rich_cost.iter_mut().find(|x| &x.0 == hex_id) {
+                Some(x) => x.1 = x.1.min(cost),
+                None => {
+                    rich_cost.push((hex_id.clone(), cost));
+                    legal.push(hex_id.clone());
+                }
             }
         }
     }
@@ -295,8 +306,18 @@ fn track_parts(g: &mut SiteGame, corp: &str, moves: &Moves, out: &mut Map<String
     let mut hexes = Vec::new();
     let mut dear = Vec::new();
     for hex in legal {
-        let (t, terrain) = m1::terrain_of(g, &hex);
-        let cost = t + fee;
+        let (t, mut terrain) = m1::terrain_of(g, &hex);
+        let mut cost = t + fee;
+        // a hex only the topped-up treasury can lay on: dear at its cheapest lay's cost (a water border the
+        // terrain doesn't show: Ruby refuses every tile there, "AE has 65 and cannot spend 80")
+        if let Some(&(_, c)) = rich_cost.iter().find(|x| x.0 == hex) {
+            if c > power {
+                if c > cost && !terrain.iter().any(|x| x == "water") {
+                    terrain.push("water".into());
+                }
+                cost = c;
+            }
+        }
         if cost > power {
             dear.push(json!({"hex": hex, "cost": cost, "terrain": terrain}));
         } else {
