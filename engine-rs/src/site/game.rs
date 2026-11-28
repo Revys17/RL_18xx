@@ -541,6 +541,8 @@ impl SiteGame {
             Vec::new()
         };
         let phase_before = self.game.phase.name.clone();
+        let count_trains = |g: &crate::game::BaseGame| g.depot.trains.len() + g.depot.discarded.len() + g.corporations.iter().map(|c| c.trains.len()).sum::<usize>();
+        let trains_before = if is_1867 { count_trains(&self.game) } else { 0 };
         // the company operating while its LoanOperations is still ahead in its turn: if this action ends the operating
         // round, its LoanOperations ran inside it (G1867::Step::LoanOperations#skip!: interest, repayments, then
         // `calculate_corporation_interest`) and the round's own count went with the round
@@ -553,11 +555,19 @@ impl SiteGame {
             }
             _ => None,
         };
-        let slots_before = if is_1867 { super::g1867::slot_owners(&self.game) } else { HashMap::new() };
-        let ranks_before: HashMap<String, super::g1867::CorpRank> = if is_1867 {
-            self.game.corporations.iter().map(|c| (c.sym.clone(), super::g1867::corp_rank(&self.game, c))).collect()
+        // (the stations' cities before, in full only when the move changes any: the compact list tells)
+        let slots_compact_before = if is_1867 { super::g1867::slot_owners_compact(&self.game) } else { None };
+        let slots_full_before = (is_1867 && slots_compact_before.is_none()).then(|| super::g1867::slot_owners(&self.game));
+        let tokens_before = if is_1867 { super::g1867::token_sig(&self.game) } else { 0 };
+        // (each company's place by the prices before: kept as its market facts, the ranks made only when needed)
+        let ranks_before: Vec<Option<(i32, i32, u8, usize)>> = if is_1867 {
+            self.game
+                .corporations
+                .iter()
+                .map(|c| c.share_price.as_ref().map(|sp| (-sp.price, -(sp.column as i32), sp.row, self.game.market_cell_position(&c.sym, sp.row, sp.column))))
+                .collect()
         } else {
-            HashMap::new()
+            Vec::new()
         };
         let merge_state_before = match &self.game.round {
             crate::rounds::Round::Merger(s) => Some((s.converting, s.merge_major)),
@@ -598,11 +608,30 @@ impl SiteGame {
         if is_1867 {
             self.records_1867(&translated, &action, or_before, &parred_before);
             self.merger.update(merge_state_before, &action, &self.game.round);
-            let rank = |sym: &str| ranks_before.get(sym).cloned().unwrap_or((i32::MAX, 0, 0, 0, sym.to_string()));
-            self.token_cities.update(&slots_before, &rank, &self.game);
+            let game = &self.game;
+            let rank = |sym: &str| -> super::g1867::CorpRank {
+                match game.corp_idx.get(sym).and_then(|&ci| ranks_before.get(ci).copied().flatten().map(|r| (ci, r))) {
+                    Some((ci, (p, col, row, pos))) => (p, col, row, pos, game.corporations[ci].name.clone()),
+                    None => (i32::MAX, 0, 0, 0, sym.to_string()),
+                }
+            };
+            // (nothing to do when no station moved: the records already match the board)
+            let moved = match &slots_compact_before {
+                Some(c) => super::g1867::slot_owners_compact(game).as_ref() != Some(c),
+                None => true,
+            };
+            if moved || super::g1867::token_sig(game) != tokens_before {
+                let slots_before = match slots_full_before {
+                    Some(m) => m,
+                    None => super::g1867::slot_owners_expand(game, slots_compact_before.as_deref().unwrap_or(&[])),
+                };
+                self.token_cities.update(&slots_before, &rank, &self.game);
+            }
             // the depot's trains gone without a buyer: exported (Depot#export!; a type's last trains rust only once
             // sold, so nothing unsold rusts)
-            for (id, name) in depot_before {
+            // (trains are never made: none gone, nothing to look for)
+            let none_gone = count_trains(&self.game) == trains_before;
+            for (id, name) in depot_before.into_iter().filter(|_| !none_gone) {
                 let g = &self.game;
                 let gone = !g.depot.trains.iter().chain(g.depot.discarded.iter()).any(|t| t.id == id)
                     && !g.corporations.iter().any(|c| c.trains.iter().any(|t| t.id == id));
@@ -617,7 +646,7 @@ impl SiteGame {
             } else {
                 Vec::new()
             };
-            for (id, name, sym) in corp_trains_before {
+            for (id, name, sym) in corp_trains_before.into_iter().filter(|_| !none_gone) {
                 let g = &self.game;
                 // (a company still running keeps whatever it hasn't sold, and what it sold is someone's)
                 let alive = g.corp_idx.get(sym.as_str()).is_some_and(|&ci| !g.corporations[ci].closed && g.corporations[ci].ipo_price.is_some());

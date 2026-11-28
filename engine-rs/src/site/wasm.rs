@@ -22,12 +22,18 @@ fn parse(s: &str) -> Result<Value, JsError> {
 
 /// The most checkpoints a game keeps for `at`.
 const MAX_CHECKPOINTS: usize = 8;
+/// And near the live edge: one every TAIL_EVERY positions, the last TAIL_KEEP of them (a jump a few moves back
+/// replays at most TAIL_EVERY actions; a dense 1867 map's late actions cost milliseconds each in wasm).
+const TAIL_EVERY: usize = 30;
+const TAIL_KEEP: usize = 2;
 
 #[wasm_bindgen]
 pub struct WasmGame {
     inner: SiteGame,
     /// checkpoints for `at`: (position after raw index, the game there)
     checkpoints: Vec<SiteGame>,
+    /// the checkpoints near the live edge (`TAIL_KEEP` at most)
+    tail: Vec<SiteGame>,
 }
 
 #[wasm_bindgen]
@@ -37,7 +43,7 @@ impl WasmGame {
     pub fn load(game_json: &str) -> Result<WasmGame, JsError> {
         let data = parse(game_json)?;
         let inner = SiteGame::load(&data).map_err(err)?;
-        Ok(WasmGame { inner, checkpoints: Vec::new() })
+        Ok(WasmGame { inner, checkpoints: Vec::new(), tail: Vec::new() })
     }
 
     /// The digest of a whole replay (debugging, the native-vs-wasm check of §8.2): {digest, steps}, equal to
@@ -86,6 +92,7 @@ impl WasmGame {
                 c.kept = Vec::new();
                 self.checkpoints.push(c);
             }
+            self.note_tail();
             if let Some(s) = self.inner.process_next() {
                 steps.push(super::view::step_json(&self.inner, &s));
             }
@@ -113,6 +120,7 @@ impl WasmGame {
     /// A live action as the site stores it (with its id): its step, or "null" for a chat message.
     pub fn append(&mut self, action_json: &str) -> Result<String, JsError> {
         let a = parse(action_json)?;
+        self.note_tail();
         let step = self.inner.append(&a).map_err(err)?;
         Ok(step.map_or(Value::Null, |s| super::view::step_json(&self.inner, &s)).to_string())
     }
@@ -120,6 +128,7 @@ impl WasmGame {
     /// A move as the page would post it: {posted, step}.
     pub fn act(&mut self, action_json: &str) -> Result<String, JsError> {
         let a = parse(action_json)?;
+        self.note_tail();
         let (posted, step) = self.inner.act(&a).map_err(err)?;
         let step = step.map_or(Value::Null, |s| super::view::step_json(&self.inner, &s));
         Ok(json!({"posted": posted, "step": step}).to_string())
@@ -192,8 +201,9 @@ impl WasmGame {
         let base = self
             .checkpoints
             .iter()
-            .rev()
-            .find(|c| c.current_action_id <= id && c.pos <= self.inner.pos)
+            .chain(self.tail.iter())
+            .filter(|c| c.current_action_id <= id && c.pos <= self.inner.pos)
+            .max_by_key(|c| c.pos)
             .cloned();
         let mut g = match base {
             Some(c) => c,
@@ -203,10 +213,36 @@ impl WasmGame {
                 SiteGame::load(&data).map_err(err)?
             }
         };
-        // replay the raw actions up to `id`, but never past what this game has seen
+        // replay the raw actions up to `id`, but never past what this game has seen; without the log (a copy at a
+        // past position answers menus, views and details, never its steps' lines: the page has them from the
+        // replay), which is most of a 1867 replay's time
         g.raw = self.inner.raw.clone();
         g.kept = self.inner.kept.clone();
+        let logging = g.site_log;
+        g.site_log = false;
         g.run_to(Some(id));
-        Ok(WasmGame { inner: g, checkpoints: Vec::new() })
+        g.site_log = logging;
+        Ok(WasmGame { inner: g, checkpoints: Vec::new(), tail: Vec::new() })
+    }
+}
+
+impl WasmGame {
+    /// A checkpoint near the live edge before the next raw action (`TAIL_EVERY`, the last `TAIL_KEEP` kept; without
+    /// the raw actions, as the others).
+    fn note_tail(&mut self) {
+        let pos = self.inner.pos;
+        if pos == 0 || pos % TAIL_EVERY != 0 || pos + TAIL_KEEP * TAIL_EVERY < self.inner.total() {
+            return;
+        }
+        if self.tail.last().is_some_and(|c| c.pos >= pos) || self.checkpoints.last().is_some_and(|c| c.pos == pos) {
+            return;
+        }
+        let mut c = self.inner.clone();
+        c.raw = Vec::new();
+        c.kept = Vec::new();
+        self.tail.push(c);
+        if self.tail.len() > TAIL_KEEP {
+            self.tail.remove(0);
+        }
     }
 }

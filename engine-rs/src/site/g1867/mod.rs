@@ -311,6 +311,27 @@ pub fn corp_rank(game: &BaseGame, c: &crate::entities::Corporation) -> CorpRank 
     }
 }
 
+/// `slot_owners` without its strings, for telling whether a move changed any: (hex index, city, slot, the
+/// company's index); None when a station's company has no index (then the caller keeps `slot_owners` itself).
+pub fn slot_owners_compact(game: &BaseGame) -> Option<Vec<(usize, usize, usize, usize)>> {
+    let mut out = Vec::new();
+    for (hi, h) in game.hexes.iter().enumerate() {
+        for (ci, c) in h.tile.cities.iter().enumerate() {
+            for (si, t) in c.tokens.iter().enumerate() {
+                if let Some(t) = t {
+                    out.push((hi, ci, si, *game.corp_idx.get(t.corporation_id.as_str())?));
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+/// `slot_owners` from its compact form (the same board's hexes and companies).
+pub fn slot_owners_expand(game: &BaseGame, compact: &[(usize, usize, usize, usize)]) -> std::collections::HashMap<(String, usize, usize), String> {
+    compact.iter().map(|&(hi, ci, si, who)| ((game.hexes[hi].id.clone(), ci, si), game.corporations[who].sym.clone())).collect()
+}
+
 /// The companies occupying each city slot: (hex, city, slot) -> company.
 pub fn slot_owners(game: &BaseGame) -> std::collections::HashMap<(String, usize, usize), String> {
     let mut out = std::collections::HashMap::new();
@@ -324,6 +345,21 @@ pub fn slot_owners(game: &BaseGame) -> std::collections::HashMap<(String, usize,
         }
     }
     out
+}
+
+/// What `TokenCities::update` reads of the companies' tokens (per company, each token's use and hex), hashed.
+pub fn token_sig(game: &BaseGame) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in &game.corporations {
+        c.sym.hash(&mut h);
+        c.tokens.len().hash(&mut h);
+        for t in &c.tokens {
+            t.used.hash(&mut h);
+            t.city_hex_id.hash(&mut h);
+        }
+    }
+    h.finish()
 }
 
 impl TokenCities {
