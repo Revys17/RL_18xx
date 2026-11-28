@@ -27,7 +27,7 @@ ctx.__bytes = fs.readFileSync(path.join(pkg, 'engine_rs_bg.wasm'));
 vm.runInContext('wasm_bindgen.initSync({ module: new Uint8Array(__bytes) })', ctx);
 const wb = ctx.wasm_bindgen;
 const version = JSON.parse(wb.WasmGame.version());
-if (version.api !== 2) throw new Error(`api ${version.api}`);
+if (version.api !== 2 && version.api !== 3) throw new Error(`api ${version.api}`);
 console.log('version', JSON.stringify(version));
 let failures = 0;
 if (digestOnly) {

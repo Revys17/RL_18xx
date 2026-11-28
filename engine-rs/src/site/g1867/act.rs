@@ -132,34 +132,6 @@ fn price_ok(a: &Value, w: &Value, r: Option<PriceRange>) -> Result<(), String> {
     }
 }
 
-/// The router's run as the site posts it, or the refusal: `act` accepts the exact router's run only (step 1's rule;
-/// runs drawn by hand stay on Opal), each route at the engine's price.
-fn priced_run(g: &SiteGame, a: &Value) -> Result<Value, String> {
-    let corp = super::super::json::entity_of(a).map_err(|e| refused(e.message))?;
-    let (routes, _) = g.game.clone_for_search().g1867_auto_routes(&corp);
-    let posted = a.get("routes").and_then(Value::as_array).cloned().unwrap_or_default();
-    let mut out = a.clone();
-    for (k, r) in posted.iter().enumerate() {
-        let train = s(r, "train").unwrap_or_default();
-        let conns: Vec<Vec<String>> = r
-            .get("connections")
-            .and_then(Value::as_array)
-            .map(|cs| cs.iter().map(|c| c.as_array().map(|x| x.iter().filter_map(|y| y.as_str().map(str::to_string)).collect()).unwrap_or_default()).collect())
-            .unwrap_or_default();
-        let Some(mine) = routes.iter().find(|m| m.train_name == train && m.connections == conns) else {
-            return Err(super::super::game::unsupported("a run the auto-router didn't make (runs drawn by hand)"));
-        };
-        let rev = mine.revenue.unwrap_or(0);
-        if let Some(stated) = r.get("revenue").and_then(Value::as_i64) {
-            if stated as i32 != rev {
-                return Err(refused(format!("route {} states ${stated}; the engine prices it at ${rev}", k + 1)));
-            }
-        }
-        out["routes"][k]["revenue"] = json!(rev);
-    }
-    Ok(out)
-}
-
 /// The generator's verdict on a live 1867 move (`a` without its metadata): Ok, or the refusal's words.
 pub fn check_move(g: &mut SiteGame, a: &Value) -> Result<(), String> {
     let t = s(a, "type").unwrap_or_default();
@@ -184,41 +156,6 @@ pub fn check_move(g: &mut SiteGame, a: &Value) -> Result<(), String> {
     } else {
         format!("{who} cannot {} now", t.replace('_', " "))
     }))
-}
-
-/// A move of this player's as the page posts it (docs/SITE_ENGINE_RS_1867.md §3.2-§3.3): checked by the generator,
-/// a run priced by the router, then processed with the step auto actions Ruby adds. Returns the posted site action
-/// (id = the current id + 1, `auto_actions` the predicted step passes) and its step.
-pub fn act(g: &mut SiteGame, a: &Value) -> Result<(Value, Option<super::super::game::StepOut>), String> {
-    let mut posted = a.clone();
-    let obj = posted.as_object_mut().ok_or_else(|| refused("an action must be an object"))?;
-    for k in ["id", "user", "created_at", "auto_actions"] {
-        obj.remove(k);
-    }
-    obj.retain(|_, v| !v.is_null());
-    let t = s(&posted, "type").unwrap_or_default();
-    let engine_move = !(t == "message" || t == "log" || t == "end_game" || t == "undo" || t == "redo" || t.starts_with("program_"));
-    if engine_move && !g.finished() && g.done() && g.stopped.is_none() {
-        if t == "run_routes" {
-            posted = priced_run(g, &posted)?;
-        } else {
-            check_move(g, &posted)?;
-        }
-        // the move on a copy, then Ruby's step auto actions after it
-        let mut copy = g.clone();
-        copy.site_log = false;
-        let mut probe = posted.clone();
-        probe["id"] = json!(copy.current_action_id + 1);
-        copy.append(&probe)?;
-        let autos = super::autos::predict(&copy.game);
-        if !autos.is_empty() {
-            posted["auto_actions"] = json!(autos);
-        }
-    }
-    let mut with_id = posted.clone();
-    with_id["id"] = json!(g.current_action_id + 1);
-    let step = g.append(&with_id)?;
-    Ok((with_id, step))
 }
 
 /// The corpus check (`site_replay --act-check`): replaying the game, every recorded engine move is checked by the

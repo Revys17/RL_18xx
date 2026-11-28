@@ -33,6 +33,14 @@ pub struct Stats {
     pub static_infos_equal: usize,
     pub restarts: usize,
     pub restarts_equal: usize,
+    /// step 3a's client gaps (docs/SITE_ENGINE_RS_STEP3.md §10): ports:last_run, the Spreadsheet's liquidity, the
+    /// Tiles drawer's counts
+    pub last_runs: usize,
+    pub last_runs_equal: usize,
+    pub liquidity: usize,
+    pub liquidity_equal: usize,
+    pub tile_counts: usize,
+    pub tile_counts_equal: usize,
     /// field path -> (count, first example)
     pub diffs: BTreeMap<String, (usize, String)>,
     pub log_diffs: BTreeMap<String, (usize, String)>,
@@ -55,6 +63,9 @@ impl Stats {
         println!("  menus equal:     {}/{} ({:.2}%)", self.menus_equal, self.menus, pct(self.menus_equal, self.menus));
         println!("  tile options equal: {}/{} ({:.2}%)", self.tile_opts_equal, self.tile_opts, pct(self.tile_opts_equal, self.tile_opts));
         println!("  restart info equal: {}/{} ({:.2}%)", self.restarts_equal, self.restarts, pct(self.restarts_equal, self.restarts));
+        println!("  last run equal: {}/{} ({:.2}%)", self.last_runs_equal, self.last_runs, pct(self.last_runs_equal, self.last_runs));
+        println!("  liquidity equal: {}/{} ({:.2}%)", self.liquidity_equal, self.liquidity, pct(self.liquidity_equal, self.liquidity));
+        println!("  tile counts equal: {}/{} ({:.2}%)", self.tile_counts_equal, self.tile_counts, pct(self.tile_counts_equal, self.tile_counts));
         println!("  auto routes: {} compared, {} equal revenue, {} Rust higher, {} Rust lower; recorded run above Rust's: {}",
             self.routes, self.routes_equal, self.routes_rust_higher, self.routes_rust_lower, self.routes_recorded_higher);
         println!("  log steps equal: {}/{} ({:.2}%), lines {}/{} ({:.2}%)", self.log_steps_equal, self.log_steps,
@@ -93,6 +104,8 @@ impl Stats {
             "routesRustHigher": self.routes_rust_higher, "routesRustLower": self.routes_rust_lower, "recordedAboveRust": self.routes_recorded_higher, "logSteps": self.log_steps, "logStepsEqual": self.log_steps_equal,
             "logLines": self.log_lines, "logLinesEqual": self.log_lines_equal, "misaligned": self.misaligned,
             "staticInfos": self.static_infos, "staticInfosEqual": self.static_infos_equal,
+            "lastRuns": self.last_runs, "lastRunsEqual": self.last_runs_equal, "liquidity": self.liquidity,
+            "liquidityEqual": self.liquidity_equal, "tileCounts": self.tile_counts, "tileCountsEqual": self.tile_counts_equal,
             "diffs": m(&self.diffs), "logDiffs": m(&self.log_diffs), "logExtra": m(&self.log_extra),
         })
     }
@@ -277,6 +290,51 @@ impl<'a> GameCompare<'a> {
             }
             for (p, ex) in d {
                 Stats::note(&mut stats.diffs, normalize(&p), format!("{gid}@{}: {ex}", gold.get("actionId").unwrap_or(&Value::Null)));
+            }
+        }
+        if let Some(Value::Object(lr)) = gold.get("lastRun") {
+            for (sym, theirs) in lr {
+                stats.last_runs += 1;
+                let mine = super::details::last_run_info(g, if sym.is_empty() { None } else { Some(sym.as_str()) });
+                let mut d = Vec::new();
+                diff("lastRun", &mine, theirs, &mut d);
+                if d.is_empty() {
+                    stats.last_runs_equal += 1;
+                }
+                for (p, ex) in d {
+                    Stats::note(&mut stats.diffs, normalize(&p), format!("{gid}@{} {sym}: {ex}", gold.get("actionId").unwrap_or(&Value::Null)));
+                }
+            }
+        }
+        if let Some(det) = gold.get("details") {
+            let mine = super::details::details(g, &json!(["tiles", "sheet"])).unwrap_or(Value::Null);
+            for p in det.pointer("/sheet/players").and_then(Value::as_array).cloned().unwrap_or_default() {
+                let (Some(pid), Some(l)) = (p.get("id").and_then(Value::as_u64), p.get("liquidity")) else { continue };
+                if l.is_null() {
+                    continue;
+                }
+                stats.liquidity += 1;
+                let ours = mine.pointer(&format!("/sheet/liquidity/{pid}")).cloned().unwrap_or(Value::Null);
+                if &ours == l {
+                    stats.liquidity_equal += 1;
+                } else {
+                    Stats::note(&mut stats.diffs, "details.liquidity".into(), format!("{gid}@{} {pid}: rust {ours} / opal {l}", gold.get("actionId").unwrap_or(&Value::Null)));
+                }
+            }
+            let left: std::collections::HashMap<String, Value> = mine
+                .pointer("/tiles/tiles")
+                .and_then(Value::as_array)
+                .map(|v| v.iter().filter_map(|t| Some((t.get("name")?.as_str()?.to_string(), t.get("left")?.clone()))).collect())
+                .unwrap_or_default();
+            for t in det.pointer("/tiles/tiles").and_then(Value::as_array).cloned().unwrap_or_default() {
+                let (Some(name), Some(l)) = (t.get("name").and_then(Value::as_str), t.get("left")) else { continue };
+                stats.tile_counts += 1;
+                let ours = left.get(name).cloned().unwrap_or(json!(0));
+                if &ours == l {
+                    stats.tile_counts_equal += 1;
+                } else {
+                    Stats::note(&mut stats.diffs, "details.tiles.left".into(), format!("{gid}@{} {name}: rust {ours} / opal {l}", gold.get("actionId").unwrap_or(&Value::Null)));
+                }
             }
         }
         if let Some(Value::Object(menus)) = gold.get("menus") {

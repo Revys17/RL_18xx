@@ -136,7 +136,7 @@ fn ruby_must_buy(g: &mut SiteGame, corp: &str) -> bool {
 }
 
 /// Ruby's depot_trains: the next train, those of later types already available, and one of each discarded type.
-fn depot_trains(g: &SiteGame) -> Vec<(String, String, i32, bool)> {
+pub(super) fn depot_trains(g: &SiteGame) -> Vec<(String, String, i32, bool)> {
     let game = &g.game;
     let mut out: Vec<(String, String, i32, bool)> = Vec::new();
     let mut names: Vec<String> = Vec::new();
@@ -906,7 +906,7 @@ fn discard_options(g: &SiteGame) -> Value {
 
 /// Ruby BuyCompany#actions beside the active step: a private any player holds that the company can pay the
 /// minimum price for, in a phase that allows it.
-fn ruby_buy_company_open(g: &SiteGame, corp: &str) -> bool {
+pub(super) fn ruby_buy_company_open(g: &SiteGame, corp: &str) -> bool {
     let game = &g.game;
     let Some(&ci) = game.corp_idx.get(corp) else { return false };
     let cash = game.corporations[ci].cash;
@@ -1034,7 +1034,7 @@ fn emr_power(g: &SiteGame, pid: u32, corp: &str) -> i32 {
     cash + per.values().sum::<i32>() + ccash
 }
 
-fn exchange_offers(g: &SiteGame, pid: u32) -> Vec<Value> {
+pub(super) fn exchange_offers(g: &SiteGame, pid: u32) -> Vec<Value> {
     if matches!(g.game.round, Round::Auction(_)) {
         return vec![];
     }

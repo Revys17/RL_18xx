@@ -275,6 +275,11 @@ impl TileSupply {
         self.list.iter().find(|t| tile_name(t) == Some(name)).map(String::as_str)
     }
 
+    /// How many tiles of a name the supply holds (Ruby's `@tiles` of that name).
+    pub fn count(&self, name: &str) -> u32 {
+        self.list.iter().filter(|t| tile_name(t) == Some(name)).count() as u32
+    }
+
     /// Where a tile name first appears in the supply (the order of the tile options).
     pub fn rank(&self, name: &str) -> usize {
         self.list.iter().position(|t| tile_name(t) == Some(name)).unwrap_or(usize::MAX)

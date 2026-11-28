@@ -68,19 +68,22 @@ pub fn last_run_info(g: &SiteGame, sym: Option<&str>) -> Value {
     };
     out["sym"] = json!(sym);
     out["or"] = json!(format!("{}.{}", e.turn, e.round));
-    if let Some((t, r, hexes)) = g.laid_hexes.get(sym) {
-        if (*t, *r) == (e.turn, e.round) {
-            out["laid"] = json!(hexes);
-        }
+    if let Some((_, _, hexes)) = g.laid_hexes.get(sym).and_then(|l| l.iter().find(|x| (x.0, x.1) == (e.turn, e.round))) {
+        out["laid"] = json!(hexes);
     }
     if let Some(run) = g.last_runs.get(sym) {
         if (run.turn, run.round) == (e.turn, e.round) && !e.no_run {
+            // the routes as Opal's map rebuilds them on today's board (`Engine::Route.new` per train, each excluding the
+            // track of those before it): a route that no longer fits the map has no hexes and no track
+            let rebuilt = super::route_check::rebuilt_hexes(g, sym, &run.routes);
             let routes: Vec<Value> = run
                 .routes
                 .iter()
-                .map(|r| {
+                .zip(rebuilt)
+                .map(|(r, hexes)| {
+                    let track = if hexes.is_some() { super::track::route_track(g, r) } else { None };
                     json!({"train": r.get("train"), "revenue": r.get("revenue"), "connections": r.get("connections"),
-                           "hexes": r.get("hexes"), "track": super::track::route_track(g, r)})
+                           "hexes": hexes.unwrap_or_default(), "track": track})
                 })
                 .collect();
             out["routes"] = json!(routes);
@@ -96,6 +99,13 @@ pub fn details(g: &mut SiteGame, parts: &Value) -> Result<Value, String> {
     if want("tiles") {
         let mut counts: Vec<(String, u32)> = g.game.tile_counts_remaining.iter().map(|(k, v)| (k.clone(), *v)).collect();
         counts.sort();
+        // an unlimited tile (1867's 7, 8, 9): Ruby's supply holds one, and every one upgraded over comes back
+        // (`add_extra_tile`, `update_tile_lists`; docs/SITE_ENGINE_RS_STEP3.md §10)
+        for (name, left) in counts.iter_mut() {
+            if *left >= u32::MAX / 2 {
+                *left = g.supply.count(name);
+            }
+        }
         let total: std::collections::HashMap<&str, u32> = g.game.title_def().tile_counts().into_iter().collect();
         out.insert(
             "tiles".into(),
@@ -104,16 +114,85 @@ pub fn details(g: &mut SiteGame, parts: &Value) -> Result<Value, String> {
     }
     if want("sheet") {
         let hist = g.game.site.as_ref().map(|r| r.player_history.clone()).unwrap_or_default();
+        let liquidity: serde_json::Map<String, Value> = g.players.iter().map(|p| (p.0.to_string(), json!(liquidity(g, p.0)))).collect();
         out.insert(
             "sheet".into(),
             json!({"history": hist.iter().map(|h| json!({"round": h.round, "turn": h.turn, "num": h.round_num,
-                "values": h.values.iter().map(|(p, v)| (p.to_string(), json!(v))).collect::<serde_json::Map<_, _>>()})).collect::<Vec<_>>()}),
+                "values": h.values.iter().map(|(p, v)| (p.to_string(), json!(v))).collect::<serde_json::Map<_, _>>()})).collect::<Vec<_>>(),
+                "liquidity": liquidity}),
         );
     }
     if want("info") {
         out.insert("info".into(), json!({"phase": g.game.phase.name, "endReason": g.end_reason()}));
     }
     Ok(Value::Object(out))
+}
+
+/// Ruby `Corporation#operated?` (1867): its `operating_history` has an entry, i.e. its dividend step has run (the
+/// site's records; engine-rs's `ever_operated` without them). A major formed from a minor (a conversion or a
+/// merger) or reset by nationalization is a new object in Ruby: it hasn't operated until its own first dividend,
+/// whatever its minors did.
+pub(crate) fn operated_1867(game: &crate::game::BaseGame, c: &crate::entities::Corporation) -> bool {
+    match game.site.as_ref() {
+        Some(r) => r.op_history.get(&c.sym).is_some_and(|l| !l.is_empty()),
+        None => c.ever_operated,
+    }
+}
+
+/// Ruby `Game#liquidity(player)` (the Spreadsheet's Liquidity column, docs/SITE_ENGINE_RS_STEP3.md §10): the cash
+/// alone before 1830's second stock round (`sellable_turn?`); else the cash and, for each company the player holds
+/// shares of (1867: one that has operated, `SELL_AFTER :operate`), the dearest bundle Ruby's `bundles_for_corporation`
+/// makes that may be dumped and fits in the market (`value_for_dumpable`: the shares by percent with the president's
+/// certificate last, each prefix, and the president's partial bundles; a bundle's price `ceil(price * percent / unit)`).
+pub fn liquidity(g: &SiteGame, pid: u32) -> i32 {
+    use crate::entities::EntityId;
+    let game = &g.game;
+    let Some(p) = game.players.iter().find(|x| x.id == pid) else { return 0 };
+    let is_1867 = game.title == "1867";
+    let sellable_turn = is_1867 || game.turn > 1 || !matches!(game.round, Round::Stock(_));
+    if !sellable_turn {
+        return p.cash;
+    }
+    let me = EntityId::player(pid);
+    let mut value = p.cash;
+    for c in &game.corporations {
+        let mut shares: Vec<&crate::entities::Share> = c.shares.iter().filter(|s| s.owner == me).collect();
+        if shares.is_empty() || c.ipo_price.is_none() || c.closed {
+            continue;
+        }
+        if is_1867 && !operated_1867(game, c) {
+            continue;
+        }
+        let Some(price) = c.share_price.as_ref().map(|s| s.price) else { continue };
+        shares.sort_by_key(|s| (s.president as u8, s.percent));
+        let unit = c.share_unit_percent.max(1) as i64;
+        let pool = c.market_shares_percent() as i64;
+        let best_other = game.players.iter().filter(|x| x.id != pid).map(|x| c.percent_owned_by(&EntityId::player(x.id)) as i64).max().unwrap_or(0);
+        let mut best = 0i64;
+        let mut pct = 0i64;
+        let mut bundles: Vec<(i64, bool)> = Vec::new();
+        for s in &shares {
+            pct += s.percent as i64;
+            bundles.push((pct, s.president));
+        }
+        if let Some(last) = shares.last().filter(|s| s.president) {
+            let extra = (last.percent as i64 - unit) / unit;
+            for n in 1..=extra {
+                bundles.push((pct - unit * n, true));
+            }
+        }
+        for (percent, with_pres) in bundles {
+            let pres_pct = shares.iter().find(|s| s.president).map_or(0, |s| s.percent as i64);
+            let dumpable = !with_pres || best_other >= pres_pct;
+            if !dumpable || percent + pool > 50 {
+                continue;
+            }
+            let bundle_price = (price as i64 * percent + unit - 1) / unit;
+            best = best.max(bundle_price);
+        }
+        value += best as i32;
+    }
+    value
 }
 
 /// The Auto tab's facts (living-board moves.ts `programInfo` / `ProgramInfo`): the program types 1830 offers (Ruby
