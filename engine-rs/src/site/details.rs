@@ -27,7 +27,9 @@ pub fn meta(g: &SiteGame) -> Value {
     json!({
         "turn": g.game.turn,
         "round": super::view::round_info(g)["name"],
-        "acting": if g.game.title == "1867" {
+        "acting": if g.game.g1822.is_some() {
+            super::g1822::active_players(g)
+        } else if g.game.title == "1867" {
             super::g1867::active_players(&mut g.game.clone_for_search())
         } else {
             super::view::active_players(g)
@@ -96,7 +98,21 @@ pub fn last_run_info(g: &SiteGame, sym: Option<&str>) -> Value {
 pub fn details(g: &mut SiteGame, parts: &Value) -> Result<Value, String> {
     let want = |p: &str| parts.as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(p)));
     let mut out = serde_json::Map::new();
-    if want("tiles") {
+    if want("tiles") && g.game.g1822.is_some() {
+        // the 1822 engine's supply: what is left of each tile (an unlimited one: Ruby's supply holds one at a time)
+        let title = g.game.title_def();
+        let total: Vec<(&str, u32)> = title.tile_counts();
+        let list: Vec<Value> = total
+            .iter()
+            .map(|(k, t)| {
+                let unlimited = *t == u32::MAX;
+                let left = g.game.tile_counts_remaining.get(*k).copied().unwrap_or(0);
+                json!({"name": k, "left": if unlimited { json!(null) } else { json!(left) }, "total": if unlimited { json!(null) } else { json!(t) },
+                       "unlimited": unlimited})
+            })
+            .collect();
+        out.insert("tiles".into(), json!({"tiles": list}));
+    } else if want("tiles") {
         let mut counts: Vec<(String, u32)> = g.game.tile_counts_remaining.iter().map(|(k, v)| (k.clone(), *v)).collect();
         counts.sort();
         // an unlimited tile (1867's 7, 8, 9): Ruby's supply holds one, and every one upgraded over comes back
@@ -202,12 +218,14 @@ pub fn liquidity(g: &SiteGame, pid: u32) -> i32 {
 /// parred corporations with shares in the IPO or the market (counts of certificates; `owned` in shares).
 pub fn program_info(g: &SiteGame, pid: u32) -> Value {
     use crate::entities::EntityId;
-    if g.finished() || !g.game.players.iter().any(|p| p.id == pid) {
+    if g.finished() || !g.game.players.iter().any(|p| p.id == g.seat(pid)) {
         return Value::Null;
     }
-    let pe = EntityId::player(pid);
+    let pe = EntityId::player(g.seat(pid));
     let mut buyable = Vec::new();
-    for c in g.game.corporations.iter().filter(|c| !c.closed && c.ipo_price.is_some()) {
+    // (the 1822 family's minors have no shares to buy)
+    let family = g.game.g1822.is_some();
+    for c in g.game.corporations.iter().filter(|c| !c.closed && c.ipo_price.is_some() && !(family && c.corp_type == crate::title::CorpType::Minor)) {
         let ipo = c.shares.iter().filter(|s| !s.owner.is_player() && !s.owner.is_market()).count();
         let market = c.shares.iter().filter(|s| s.owner.is_market()).count();
         if ipo == 0 && market == 0 {
@@ -233,7 +251,7 @@ pub fn program_info(g: &SiteGame, pid: u32) -> Value {
         "available": available,
         "multiple": false,
         "forceUnconditional": false,
-        "stock": matches!(g.game.round, Round::Stock(_)),
+        "stock": if family { g.game.rnd().kind == crate::g1822::RoundKind::Stock } else { matches!(g.game.round, Round::Stock(_)) },
         "stockName": "Stock Round",
         "mine": mine,
         "buyable": buyable,

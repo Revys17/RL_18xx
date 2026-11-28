@@ -50,6 +50,13 @@ fn ruby_arg_keys(t: &str) -> Option<&'static [&'static str]> {
         "bankrupt" => &["option"],
         "merge" => &["corporation", "minor"],
         "choose" => &["choice", "target", "target_type"],
+        // the 1822 family's (Ruby's Action args_to_h)
+        "choose_ability" => &["choice", "target", "target_type"],
+        "acquire_company" => &["company"],
+        "hex_token" => &["hex", "cost", "token_type"],
+        "payoff_player_debt" => &[],
+        "payoff_player_debt_partial" => &["amount"],
+        "assign" => &["target", "target_type", "city"],
         "take_loan" => &["loan"],
         "payoff_loan" => &["loan"],
         "program_buy_shares" => &["corporation", "until_condition", "from_market", "auto_pass_after"],
@@ -82,6 +89,10 @@ pub fn entity_player(g: &SiteGame, a: &Value) -> Option<Option<u32>> {
     let ent = s(a, "entity").unwrap_or_default();
     let game = &g.game;
     let corp_owner = |sym: &str| -> Option<u32> {
+        if game.g1822.is_some() {
+            // (a minor's owner or a major's president, as a site id)
+            return game.g1822_corp_president(sym).map(|p| g.site_id(p));
+        }
         let &ci = game.corp_idx.get(sym)?;
         let c = &game.corporations[ci];
         c.owner_id.player_id().or_else(|| c.president_id())
@@ -92,7 +103,7 @@ pub fn entity_player(g: &SiteGame, a: &Value) -> Option<Option<u32>> {
             let &mi = game.company_idx.get(ent.as_str())?;
             let owner = &game.companies[mi].owner;
             match owner.player_id() {
-                Some(p) => Some(Some(p)),
+                Some(p) => Some(Some(g.site_id(p))),
                 None => owner.corp_sym().and_then(corp_owner).map(Some),
             }
         }
@@ -103,6 +114,13 @@ pub fn entity_player(g: &SiteGame, a: &Value) -> Option<Option<u32>> {
 
 /// Ruby `active_players_id` (the round's active entities' players; every player not bankrupt when there are none).
 pub fn ruby_active_players(g: &mut SiteGame) -> Vec<u32> {
+    if g.game.g1822.is_some() {
+        let acting = super::g1822::active_players(g);
+        if !acting.is_empty() {
+            return acting;
+        }
+        return g.game.players.iter().filter(|p| !p.bankrupt).map(|p| g.site_id(p.id)).collect();
+    }
     let acting = if g.game.title == "1867" {
         super::g1867::active_players(&mut g.game)
     } else {
@@ -248,6 +266,10 @@ pub struct Decision {
 /// process, a run with Rust's prices) or Err(refused: words).
 pub fn check(g: &mut SiteGame, a: &Value) -> Result<Value, String> {
     let t = atype(a);
+    if g.game.g1822.is_some() {
+        // the generator decides (Ruby's set); a run must be the router's (docs/SITE_ENGINE_RS_1822.md §4.2)
+        return if t == "run_routes" { super::g1822::act::checked_run(g, a) } else { super::g1822::act::check_move(g, a) };
+    }
     if t == "run_routes" {
         return super::route_check::checked_run(g, a);
     }
@@ -456,6 +478,9 @@ pub fn bot_view(g: &mut SiteGame) -> Value {
     if finished || error.is_some() {
         return out;
     }
+    if g.game.g1822.is_some() {
+        return super::g1822::bot_view(g, out);
+    }
     let is_1867 = g.game.title == "1867";
     // the step's entity, and whether it is a player (1867's step says so: its private "3" and a player whose id is 3
     // are both "3" as strings; 1830's privates have letters)
@@ -525,6 +550,9 @@ fn finished_acting(g: &SiteGame) -> Vec<u32> {
         if !a.is_empty() {
             return a.clone();
         }
+    }
+    if g.game.g1822.is_some() {
+        return g.game.players.iter().filter(|p| !p.bankrupt).map(|p| g.site_id(p.id)).collect();
     }
     super::view::player_order(g).into_iter().filter(|p| g.game.players.iter().any(|x| x.id == *p && !x.bankrupt)).collect()
 }

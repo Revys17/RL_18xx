@@ -31,6 +31,8 @@ pub mod acts;
 #[cfg(feature = "site")]
 pub mod g1867;
 #[cfg(feature = "site")]
+pub mod g1822;
+#[cfg(feature = "site")]
 pub mod authority;
 #[cfg(feature = "site")]
 pub mod check1830;
@@ -42,7 +44,7 @@ pub mod programs;
 pub mod wasm;
 
 /// The titles the site layer plays (docs/SITE_ENGINE_RS_1867.md §3.1): what `version()` lists.
-pub const TITLES: &[&str] = &["1830", "1867"];
+pub const TITLES: &[&str] = &["1830", "1867", "1822", "1822CA"];
 
 /// The engine's build: what `WasmGame.version()` and `site_engine version` print (docs/SITE_ENGINE_RS.md §3.2; API 3:
 /// docs/SITE_ENGINE_RS_STEP3.md §10, K1').

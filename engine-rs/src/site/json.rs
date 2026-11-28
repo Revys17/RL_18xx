@@ -191,6 +191,17 @@ pub fn action_from_json(a: &Value) -> Result<Action, GameError> {
             let (hex_id, city_index) = parse_city_ref(&s(a, "city")?);
             Action::RemoveToken { entity_id, hex_id, city_index, slot: opt_i(a, "slot")?.unwrap_or(0) as u8 }
         }
+        // the 1822 family's (docs/SITE_ENGINE_RS_1822.md §4.2), as `Action::from_py_dict` reads them
+        "choose_ability" => Action::ChooseAbility { entity_id, choice: s(a, "choice")? },
+        "acquire_company" => Action::AcquireCompany { entity_id, company_sym: s(a, "company")? },
+        "hex_token" => Action::HexToken { entity_id, hex_id: s(a, "hex")?, token_type: opt_s(a, "token_type")? },
+        "payoff_player_debt" => Action::PayoffPlayerDebt { entity_id },
+        "payoff_player_debt_partial" => Action::PayoffPlayerDebtPartial { entity_id, amount: i(a, "amount")? },
+        "assign" => Action::Assign {
+            entity_id,
+            target: s(a, "target")?,
+            target_type: opt_s(a, "target_type")?.unwrap_or_else(|| "hex".into()),
+        },
         other => return Err(GameError::new(format!("unsupported action type: {other}"))),
     })
 }

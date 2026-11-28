@@ -178,6 +178,9 @@ fn owner_code(e: &EntityId) -> String {
 
 /// The shadow key of the position now. `last` is the raw action the position follows (None at the start).
 pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
+    if g.game.g1822.is_some() {
+        return super::g1822::key::key(g, last);
+    }
     let finished = g.game.finished;
     let is_1867 = super::g1867::is_1867(g);
     let info = super::view::round_info(g);
