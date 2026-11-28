@@ -163,9 +163,12 @@ pub(crate) fn operated_1867(game: &crate::game::BaseGame, c: &crate::entities::C
 pub fn liquidity(g: &SiteGame, pid: u32) -> i32 {
     use crate::entities::EntityId;
     let game = &g.game;
+    // (the engine's player: the 1822 family's seat)
+    let pid = g.seat(pid);
     let Some(p) = game.players.iter().find(|x| x.id == pid) else { return 0 };
     let is_1867 = game.title == "1867";
-    let sellable_turn = is_1867 || game.turn > 1 || !matches!(game.round, Round::Stock(_));
+    let family = game.g1822.is_some();
+    let sellable_turn = is_1867 || family || game.turn > 1 || !matches!(game.round, Round::Stock(_));
     if !sellable_turn {
         return p.cash;
     }
@@ -177,6 +180,10 @@ pub fn liquidity(g: &SiteGame, pid: u32) -> i32 {
             continue;
         }
         if is_1867 && !operated_1867(game, c) {
+            continue;
+        }
+        // G1822 SELL_AFTER :full_or_turn: a company that has operated
+        if family && game.g().operating_history.get(&c.sym).copied().unwrap_or(0) == 0 {
             continue;
         }
         let Some(price) = c.share_price.as_ref().map(|s| s.price) else { continue };

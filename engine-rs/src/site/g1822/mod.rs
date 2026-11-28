@@ -13,6 +13,7 @@
 
 pub mod act;
 pub mod apply;
+pub mod check;
 pub mod autos;
 pub mod generate;
 pub mod key;

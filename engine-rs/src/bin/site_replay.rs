@@ -10,6 +10,7 @@
 //!     --generate-1822 N --title 1822|1822CA [--rules-policy] [--seed S] [--moves M] [--out DIR]
 //!         (1822-family generated games through the site layer, SITE_ENGINE_RS_1822.md §6.1 A2: 2-7 players and the
 //!         rule combinations in turn, each written as site JSON and replayed to the walk's key)
+//!     --restricted-check <files...>   (1822 family: the site's menus vs engine-rs's RESTRICTED set at every position)
 //!
 //! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
 //! the Opal goldens (B's `test/rust/golden.cjs`) where they exist.
@@ -58,6 +59,7 @@ fn main() {
     let mut generate: Option<usize> = None;
     let mut generate_1822: Option<usize> = None;
     let mut rules_policy = false;
+    let mut restricted_check = false;
     let mut gen_seed: u64 = 1;
     let mut gen_moves: usize = 3000;
     let mut gen_out: Option<String> = None;
@@ -96,6 +98,7 @@ fn main() {
                 i += 1;
             }
             "--rules-policy" => rules_policy = true,
+            "--restricted-check" => restricted_check = true,
             "--generate" => {
                 generate = argv.get(i + 1).and_then(|x| x.parse::<usize>().ok());
                 i += 1;
@@ -123,6 +126,17 @@ fn main() {
             a => inputs.push(a.to_string()),
         }
         i += 1;
+    }
+    if restricted_check {
+        let mut r = engine_rs::site::g1822::check::Report::default();
+        for f in corpus_files(&inputs) {
+            let data: Value = serde_json::from_str(&std::fs::read_to_string(&f).unwrap()).unwrap();
+            if let Err(e) = engine_rs::site::g1822::check::check_game(&f.display().to_string(), &data, &mut r) {
+                println!("{}: {e}", f.display());
+            }
+        }
+        println!("{}", r.json());
+        return;
     }
     if let Some(n) = generate_1822 {
         let title = only_title.clone().unwrap_or_else(|| "1822".into());

@@ -44,133 +44,19 @@ fn fixtures_replay_to_their_results() {
     }
 }
 
-/// A move's site action as a comparable string.
-fn canon(v: &Value) -> String {
-    let mut v = v.clone();
-    if let Some(o) = v.as_object_mut() {
-        o.remove("created_at");
-        o.remove("user");
-    }
-    v.to_string()
-}
-
-/// The actions every fact of a menu names (outside the flat `moves` list).
-fn fact_actions(v: &Value, out: &mut BTreeSet<String>, top: bool) {
-    match v {
-        Value::Object(m) => {
-            if let Some(a) = m.get("action").filter(|a| a.get("type").is_some()) {
-                out.insert(canon(a));
-            }
-            for (k, x) in m {
-                if top && k == "moves" {
-                    continue;
-                }
-                if k != "action" {
-                    fact_actions(x, out, false);
-                }
-            }
-        }
-        Value::Array(xs) => xs.iter().for_each(|x| fact_actions(x, out, false)),
-        _ => {}
-    }
-}
-
-/// The binding check of the RL session (docs/SITE_ENGINE_RS_1822.md §3.4): at every position of every fixture, the
-/// site's menus (the players to act, own-only, no fallback) against engine-rs's RESTRICTED legal set, both directions;
-/// the only difference allowed is where the generator fell back to Ruby's set because the restricted one was empty
-/// (`CROSS_FALLBACK`). Also: every fact's action is one of the menu's moves and every move has a fact; the key, the
-/// snapshot and the bot view build everywhere.
+/// The binding check of the RL session (`check.rs`) on every fixture: the only difference allowed is where the
+/// generator fell back to Ruby's set (none on the fixtures).
 #[test]
 fn menus_equal_the_restricted_set_at_every_fixture_position() {
-    let mut positions = 0usize;
-    let mut equal = 0usize;
-    let mut fallback = 0usize;
-    let mut menu_only: Vec<String> = Vec::new();
-    let mut engine_only: Vec<String> = Vec::new();
-    let mut uncovered: std::collections::BTreeMap<String, usize> = Default::default();
-    let mut foreign: Vec<String> = Vec::new();
+    let mut r = super::check::Report::default();
     for name in FIXTURES {
-        let data = fixture(name);
-        let mut g = SiteGame::load(&data).unwrap();
-        g.site_log = false;
-        loop {
-            if !g.finished() {
-                positions += 1;
-                // the engine's RESTRICTED set (its fallback marked)
-                let before = crate::g1822::legal::stats::get(&crate::g1822::legal::stats::CROSS_FALLBACK);
-                let moves = g.game.g1822_legal_moves_with(CrossPlayerPolicy::RESTRICTED);
-                let fell_back = crate::g1822::legal::stats::get(&crate::g1822::legal::stats::CROSS_FALLBACK) > before;
-                let engine: BTreeSet<String> = moves.iter().map(|m| canon(&super::to_site(&g, &g.game.g1822_move_wire(m)))).collect();
-                let mut site: BTreeSet<String> = BTreeSet::new();
-                for pid in super::active_players(&g) {
-                    let m = super::menu::menu(&mut g, pid);
-                    let listed: BTreeSet<String> =
-                        m.get("moves").and_then(Value::as_array).map(|v| v.iter().map(|x| canon(&x["action"])).collect()).unwrap_or_default();
-                    let mut facts = BTreeSet::new();
-                    fact_actions(&m, &mut facts, true);
-                    for f in facts.difference(&listed) {
-                        foreign.push(format!("{name} @{}: {f}", g.current_action_id));
-                    }
-                    let mut lay_hexes: BTreeSet<String> = BTreeSet::new();
-                    for h in m.get("tileHexes").and_then(Value::as_array).into_iter().flatten() {
-                        lay_hexes.extend(h.as_str().map(str::to_string));
-                    }
-                    for a in m.get("abilities").and_then(Value::as_array).into_iter().flatten() {
-                        for h in a["hexes"].as_array().into_iter().flatten() {
-                            lay_hexes.extend(h.as_str().map(str::to_string));
-                        }
-                    }
-                    for x in m.get("moves").and_then(Value::as_array).cloned().unwrap_or_default() {
-                        // (a lay: its hex is in `tileHexes` / a private's `abilities`, the tiles come from tileOptions; a run:
-                        // `routes.pending`, the run from autoRoute)
-                        let covered = match x["type"].as_str() {
-                            Some("lay_tile") => x["action"]["hex"].as_str().is_some_and(|h| lay_hexes.contains(h)),
-                            Some("run_routes") => m["routes"]["pending"] == json!(true),
-                            _ => false,
-                        };
-                        if !covered && !facts.contains(&canon(&x["action"])) {
-                            *uncovered.entry(x["type"].as_str().unwrap_or("").to_string()).or_default() += 1;
-                        }
-                    }
-                    site.extend(listed);
-                }
-                if site == engine {
-                    equal += 1;
-                } else if fell_back {
-                    fallback += 1;
-                } else {
-                    for x in site.difference(&engine).take(3) {
-                        menu_only.push(format!("{name} @{}: {x}", g.current_action_id));
-                    }
-                    for x in engine.difference(&site).take(3) {
-                        engine_only.push(format!("{name} @{}: {x}", g.current_action_id));
-                    }
-                }
-                let _ = super::key::key(&mut g, None);
-                let _ = super::view::snapshot(&g, g.current_action_id);
-                let _ = super::super::authority::bot_view(&mut g);
-            }
-            if g.done() {
-                break;
-            }
-            while !g.done() && g.process_next().is_none() {}
-        }
+        super::check::check_game(name, &fixture(name), &mut r).unwrap();
     }
-    eprintln!(
-        "1822 menus vs RESTRICTED: {positions} positions, {equal} equal, {fallback} where the generator fell back to Ruby's set, \
-         {} menu-only and {} engine-only moves; facts outside the moves {}; moves without a fact by type {:?}",
-        menu_only.len(),
-        engine_only.len(),
-        foreign.len(),
-        uncovered
-    );
-    for x in menu_only.iter().chain(engine_only.iter()).chain(foreign.iter()).take(20) {
-        eprintln!("  {x}");
-    }
-    assert!(menu_only.is_empty() && engine_only.is_empty(), "the site's menus and the RESTRICTED set differ");
-    assert!(foreign.is_empty(), "a fact offers an action the menu's moves don't");
-    assert!(uncovered.is_empty(), "moves without a fact: {uncovered:?}");
-    assert_eq!(equal + fallback, positions);
+    eprintln!("1822 menus vs RESTRICTED on the fixtures: {}", r.json());
+    assert!(r.menu_only.is_empty() && r.engine_only.is_empty(), "the site's menus and the RESTRICTED set differ");
+    assert!(r.foreign.is_empty(), "a fact offers an action the menu's moves don't");
+    assert!(r.uncovered.is_empty(), "moves without a fact: {:?}", r.uncovered);
+    assert_eq!(r.equal + r.fallback, r.positions);
 }
 
 /// Every recorded move decided at its position as `site_engine move` decides it: all accepted but the documented
