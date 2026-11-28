@@ -39,7 +39,21 @@ pub fn auto_actions(g: &mut SiteGame, now: i64) -> Vec<Value> {
             let moves = own_moves(g, &c);
             if moves.len() == 1 {
                 let mut a = super::to_site(g, &moves[0]);
+                // 1822CA's ICR in one of several Québec cities: Ruby's PlaceToken names `slot: city.get_slot(entity)`,
+                // nil (left out of the stored action) when the city has no free slot and no reservation of its own (the
+                // destination token then goes in as an extra one); the generator's wire names the slot it will take
+                let slotless = a.get("type").and_then(Value::as_str) == Some("place_token")
+                    && match super::super::json::action_from_json(&a) {
+                        Ok(crate::actions::Action::PlaceToken { hex_id, city_index, .. }) => {
+                            let hex = g.game.g1822_resolve_hex(&hex_id).unwrap_or(hex_id);
+                            g.game.hex_idx.get(hex.as_str()).is_some_and(|&hi| g.game.g1822_get_slot(hi, city_index as usize, &c, false).is_none())
+                        }
+                        _ => false,
+                    };
                 if let Some(m) = a.as_object_mut() {
+                    if slotless {
+                        m.remove("slot");
+                    }
                     m.insert("created_at".into(), json!(now));
                 }
                 vec![a]

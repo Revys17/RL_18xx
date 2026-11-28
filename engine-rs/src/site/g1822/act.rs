@@ -420,13 +420,22 @@ pub fn checked_run(g: &mut SiteGame, a: &Value) -> Result<Value, String> {
             // the track then, rl18xx-next's RunRoutes#h_to_args)
             let stale = p.hexes.is_empty() || p.hexes.len() < p.nodes.len();
             let connections = if p.connections.is_empty() { router.map(|r| r.connections.clone()).unwrap_or_default() } else { p.connections.clone() };
-            crate::actions::RouteData {
+            let mut route = crate::actions::RouteData {
                 train_name: p.train_name.clone(),
-                hexes: if stale { router.map(|r| r.hexes.clone()).unwrap_or_default() } else { p.hexes.clone() },
+                hexes: if stale { Vec::new() } else { p.hexes.clone() },
                 revenue: None,
                 connections,
                 nodes: p.nodes.clone(),
+            };
+            if stale {
+                // Ruby's Route#hexes from the track (its stops' hexes in turn: both cities of an OO hex count, as
+                // RunRoutes#to_h stores them), the router's when the connections say nothing
+                route.hexes = visited(&route);
+                if route.hexes.is_empty() {
+                    route.hexes = router.map(|r| r.hexes.clone()).unwrap_or_default();
+                }
             }
+            route
         })
         .collect();
     let prices = g.game.g1822_price_recorded_routes(&corp, &run).map_err(|e| refused(e.message))?;

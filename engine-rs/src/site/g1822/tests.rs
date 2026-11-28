@@ -286,3 +286,43 @@ fn key_follows_rubys_ipo_extra_tokens_and_discard_turn() {
     assert_eq!(k["step"], json!("DiscardTrain"));
     assert_eq!(k["acting"], json!([4035]));
 }
+
+/// A run of one OO hex's two cities (minor 24's L train on D35, 1822_discard_trains_after_sr_export @44): the router's
+/// route lists the hex once, and the stored run has Ruby's `Route#hexes` from the track (RunRoutes#to_h: one entry per
+/// stop, rl18xx-next's `h_to_args` for a route with fewer hexes than stops), as the site's Ruby stores it.
+#[test]
+fn a_run_inside_one_hex_is_stored_with_rubys_hexes() {
+    let data = super::super::cli::truncate(&fixture("1822_discard_trains_after_sr_export"), Some(43));
+    let mut g = SiteGame::load(&data).unwrap();
+    g.run_to(None);
+    let ar = super::menu::auto_route(&mut g);
+    let routes = ar["action"]["routes"].as_array().cloned().unwrap_or_default();
+    let oo = routes.iter().find(|r| r["nodes"].as_array().is_some_and(|n| n.len() == 2) && r["revenue_str"] == json!("D35-D35"));
+    let Some(oo) = oo else { panic!("no D35 run in {ar}") };
+    let (stored, _) = g.act(&ar["action"]).unwrap();
+    let mine = stored["routes"].as_array().unwrap().iter().find(|r| r["train"] == oo["train"]).unwrap().clone();
+    assert_eq!(mine["hexes"], json!(["D35", "D35"]));
+    assert_eq!(mine["revenue_str"], json!("D35-D35"));
+}
+
+/// 1822CA's ICR reaching one of several Québec cities: Ruby's DestinationToken auto action is a PlaceToken with
+/// `slot: city.get_slot(entity)`, nil when the city has no free slot, so its stored form names none (1822CA_1 @291).
+#[test]
+fn icrs_destination_auto_token_names_rubys_slot() {
+    let full = fixture("1822CA_1");
+    let data = super::super::cli::truncate(&full, Some(290));
+    let mut g = SiteGame::load(&data).unwrap();
+    g.run_to(None);
+    let mut lay = full["actions"].as_array().unwrap().iter().find(|a| a["id"] == json!(291)).unwrap().clone();
+    if let Some(m) = lay.as_object_mut() {
+        for k in ["id", "auto_actions", "created_at"] {
+            m.remove(k);
+        }
+    }
+    let (stored, _) = g.act(&lay).unwrap();
+    let autos = stored["auto_actions"].as_array().cloned().unwrap_or_default();
+    let token = autos.iter().find(|a| a["type"] == json!("place_token")).unwrap_or_else(|| panic!("no token in {autos:?}"));
+    assert_eq!(token["city"], json!("Q1-0-0"));
+    assert_eq!(token["token_type"], json!("destination"));
+    assert!(token.get("slot").is_none(), "{token}");
+}
