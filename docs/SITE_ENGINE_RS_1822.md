@@ -713,3 +713,26 @@ details / program_info / liquidity`, `programs::auto_actions / stock_turn / owne
 - **Training session**: the edits outside `src/site` are §8.2's five (P5 ×3 files, P4, V3); the bots' driver must post
   the generator's run (§8.7 1) and expects Ruby's step autos after its move; a bid is £5 steps in [min, max], a
   corporation's train £1 steps, a partial payoff £1 steps, depot trains fixed (the generator's ranges, unchanged).
+
+### 8.9 After package B (2026-11-28): two `src/site` commits B's Ruby side found
+
+rl18xx-next's package B (branch `next/rust-1822`) wrote Ruby's side of the family's key fields (`lib/engine_shadow.rb`
+`family_1822_fields`, §4.3) and compared it with this branch's key at every position of the 11 fixtures, then re-posted
+the fixtures through the server's authoritative path with Ruby's check on. Everything it found was in `src/site/g1822`
+(no edit outside `src/site`; §8.2's list is unchanged):
+
+| Commit | What |
+|---|---|
+| 2030139 | the key and turn as Ruby's: an unsold minor's (unissued) shares are its IPO's (`corps.*.ipo` 100, Ruby `ipo_shares`; the engine keeps them unowned: was 0 at every position); 1822CA's P10 Winnipeg token found among the city's extra tokens (`"N16-1"`, was `"N16-?"`); DiscardTrain's acting player is the first crowded company's president only (Engine::Step::DiscardTrain#active_entities = `crowded_corps.take(1)`; was every crowded company's president) |
+| c31a88c | a run with fewer hexes than stops (both cities of an OO hex: D35-D35) stored with Ruby's `Route#hexes` from the track (one per stop, as RunRoutes#to_h writes it; was the router's hex list, so Ruby's `to_h` of the stored run differed); 1822CA's predicted ICR DestinationToken PlaceToken leaves out its `slot` where Ruby's `city.get_slot(entity)` is nil (no free or reserved slot: an extra token) |
+
+Each has a test in `g1822/tests.rs`. After both, Ruby's key equals this branch's at 9,551 of the fixtures' 9,552
+positions (the one: `1822_game_end_stock_market` @1404, an old record whose stored run counted the destination bonus
+twice, §2.3 G1).
+
+**Gate at c31a88c**: `--features python` 277 passed, 0 failed, 11 ignored; `--features site` 322 passed, 0 failed,
+13 ignored (+3 tests); the 1830, 1867 and 1822 neutrality pins and 1822CA's walk pin pass in both builds; the wasm32
+checks (`wasm,site-titles`, `wasm`) and the default `cargo check` clean. `src/site/g1822` is behind the `site` feature,
+which the wheel doesn't build, so `pytest tests/` can't differ from e6599f0's; run on 2030139 in this worktree's venv
+(`uv sync --reinstall-package rl18xx`, then `pytest tests/`): **1,838 passed, 7 skipped, 2 deselected, 0 failed**
+(69:36 on cores shared with B's checks; = e6599f0's).
