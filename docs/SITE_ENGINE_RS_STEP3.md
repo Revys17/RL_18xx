@@ -1,6 +1,7 @@
 # The site on engine-rs, step 3a: Rust decides 1830 and 1867 moves
 
-Status: **design 2026-11-27; package A built the same day** (§15: 00e8bf6, 3bb8916, e66ba2c and after) (branch `site/engine-rs-step3`, RL_18xx worktree `.claude/worktrees/site-engine-step3`,
+Status: **design 2026-11-27; package A built the same day** (§15: 00e8bf6, 3bb8916, e66ba2c and after); **the
+verification's findings fixed the same day** (§16: 0a98cc2, bcee0b1, 07a7cb2, ae87eee; all in `src/site`) (branch `site/engine-rs-step3`, RL_18xx worktree `.claude/worktrees/site-engine-step3`,
 on `site/engine-rs-1867` b4b2391; first commit **9fc1b38**, the 1822 neutrality pin, §9.1). Approved by Caleb ("Just
 move to the Rust engine", "yes yes yes" to step 3): his site (18xx.revys.net, `rl18xx-next`) moves from the Ruby/Opal
 engine to engine-rs, keeping only the titles engine-rs implements (1830, 1867). Steps 1 and 2 (docs/SITE_ENGINE_RS.md,
@@ -253,7 +254,8 @@ step's check).
   ruby_checks_rust&status=ruby_refused,ruby_stuck`; the runbook sets `settings.engine_authority = "rust"` on each, so
   they keep running on Rust while the rest of the title goes back (Ruby would refuse their every move). If Rust itself
   is the problem for such a game, it waits for the fix (it can't be played on either engine: Ruby's own defect).
-- **The whole step**: the previous image (production) or the previous `rl18xx-next` head (dev), as DEPLOY.md does.
+- **The whole step**: the previous image (production) or the previous `rl18xx-next` head (dev), as DEPLOY.md does (a
+  dev head without `rake dev_up`'s never-down guard needs migration 0015 reverted by hand first: DEPLOY.md, §16).
 
 ### 3.6 `site_engine serve` (specified; built only on the trigger)
 
@@ -305,17 +307,18 @@ from A's verification (§12.1), which judges Rust's refusals by Ruby on every co
 
 | Class | What | Signature the classifier matches |
 |---|---|---|
-| **R1** Ruby's stale operator (1867) | After a MajorTrainless `choose nationalize` with other majors queued, Ruby's round keeps the reset major as operator and refuses every later move | `ruby_refused`, the game's operating round has a `choose` / `nationalize` before it with ≥ 2 majors in MajorTrainless's queue at the time; later rows `ruby_stuck` R1 |
+| **R1** Ruby's stale operator (1867) | After a MajorTrainless `choose nationalize` with other majors queued, Ruby's round keeps the reset major as operator and refuses every later move | the nationalizing move's own row (`differs` / `autos_differ`: Ruby's round left on the company it reset, hint `stale_operator_after`); then `ruby_refused`, the game's operating round has a `choose` / `nationalize` before it with ≥ 2 majors in MajorTrainless's queue at the time; later rows `ruby_stuck` R1 |
 | **R2** Ruby's stale graph cache (1867) | Ruby's `mergeable_candidates` / `can_really_place_token?` read an old graph: Ruby auto-passes a minor (Merge) or skips a station step (Token) the rules allow | `autos_differ` where Ruby's list has an extra `pass` of a Merge or Token step entity; or `ruby_refused` of that entity's merge / station right after such a row |
 | **R3** the opening auction nobody can bid (1867) | Ruby raises (`undefined method 'cash' for nil`); engine-rs gives the lot to the first player at $0 | `ruby_refused` / `error` in `SingleItemAuction` with that message |
 | **R4** MajorTrainless' phantom (1867) | after `event_minors_nationalized!` resets a major, Ruby's MajorTrainless keeps it | `differs` on `trainless`, then `ruby_refused` |
 | **R5** orphan trains (1867) | a major nationalized with trains: Ruby keeps them on the old object (`Depot#other_trains`), engine-rs drops them | `differs` on `depot` / a reset major's `trains` |
-| **R6** 5+5E on Toronto / Montreal (1867) | the replay pricer counts a stop as tokened per hex where Ruby counts per city | `differs` on `last_action.revenues` only, a 5+5E route through Toronto (F16) or Montreal (L12) |
-| **R7** the train limit (1867, §8.11.2) | Rust refuses a depot train for a company at its limit; Ruby took it | never a check row (nothing stored): an Opal page's `engine_report refused` whose words name the limit |
+| ~~R6~~ 5+5E on Toronto / Montreal (1867) | **retired (§16)**: the replay pricer counted a stop as tokened per hex where Ruby counts per city; the route check and the key now price per city as Ruby, so a revenue difference is `unclassified` | — |
+| **R7** the train limit (1867, §8.11.2) | Rust refuses a depot train (or another company's) for a company at its limit; Ruby took it | a `refusal` row `rust_refused` of a `buy_train` whose company Ruby finds at its limit before the move (hint `at_train_limit`) or crowded after it; an Opal page's `engine_report refused` whose words name the limit |
 | **R8** program reasons' words | Ruby's `program_disable` reason names a player differently | `autos_differ` where only `program_disable.reason` differs |
-| **R9** Ruby-accepted probes Rust refuses (1830's 111@9 kind) | Rust stricter than Ruby on malformed moves | `engine_report refused` only (nothing stored) |
+| **R9** Ruby-accepted probes Rust refuses (1830's 111@9 kind) | Rust stricter than Ruby on malformed moves | 1867: a `refusal` row `rust_refused` of a `par` Ruby's own Par view never offers (`ipo_type` not `:par`: a minor, which is bid for; a major before phase 4 or with no home left; hint `par_not_offered`); `engine_report refused` |
 
-Everything else is `unclassified` and is a bug of Rust's until shown otherwise.
+Everything else is `unclassified` and is a bug of Rust's until shown otherwise, `error` rows (Ruby itself failing)
+included; R8 only when the reason is the row's only difference.
 
 ---
 
@@ -385,7 +388,10 @@ visits; 1867's internal `Par` of a minor won at auction tracked with no id and t
 `(id, created_at)` (`program_meta`: Ruby's `action < program` compares ids, else times). Every stored action with auto
 actions in the corpora is reproduced field for field (created_at aside): :9301 1830 123 / 123, production 1830 101 /
 101, :9301 1867 260 / 260, production 1867 469 / 469 (the 1867 counts are the kept actions; the rest of §2.4's are in
-undone branches).
+undone branches). **Fixed after the verification (0a98cc2, §16)**: a minor won by a stock-round bid whose home station
+is still to be chosen (Ruby's HomeToken step active after `win_bid`) leaves Ruby's round on the winner until the
+station is placed, so the internal Par stays in `players_history` (`StockHistory::held_at`); that Par compares later
+than any stored program (Ruby makes it with `Time.now` while it loads the game for the request).
 
 ---
 
@@ -419,6 +425,14 @@ between c57803b and lib/run_revenue.rb: the page's claimed `revenue_str`: 568): 
 12,877 stored 1830 runs.
 Not modelled (none in 1830's or 1867's tiles): lanes, local trains, intra-tile ambiguous connections (refused as
 `unsupported`), double towns, the off-centre town rule of `check_overlap`.
+
+**1867's price per city (bcee0b1, §16)**: the route check prices an 1867 run over the stops the rebuilt route visits
+(`price_1867`: each stop's own revenue and `tokened_by` of the city visited, as Ruby's `compute_stops` asks
+`stop.tokened_by?(route.corporation)`), not over the connection chains' hexes as the replay pricer
+`title::g1867::recorded_route_revenue` does (a Toronto or Montreal stop counted as tokened when any city of the hex
+holds the company's station: a 5+5E could fill its paying slot with an untokened capital and overpay). The shadow
+key's `last_action` prices a stored run the same way (`price_stored_1867`; the replay pricer only when a route can't
+be rebuilt). The router already priced per city; the replay pricer itself (training's) is unchanged.
 
 ---
 
@@ -670,7 +684,7 @@ on a fresh read-only export (deleted after).
 |---|---|---|---|
 | 0 | deploy the 3a image, `ENGINE_AUTHORITY_TITLES` unset | nothing changes: Ruby decides, the shadow as today | the previous image |
 | 1 | `ENGINE_AUTHORITY_TITLES=1830` | `GET /api/admin/engine_shadow?direction=ruby_checks_rust`: every row `equal` or classified; `engine_ms` p95 < 100 ms; no 503 | admin switch `{title: "1830", engine: "ruby"}` (at once), then unset the env |
-| 2 | `ENGINE_AUTHORITY_TITLES=1830,1867` | the same; R1-R6 rows expected only in their situations | admin switch for 1867; games listed `ruby_refused` / `ruby_stuck` pinned `rust` first (§3.5) |
+| 2 | `ENGINE_AUTHORITY_TITLES=1830,1867` | the same; R1-R5 rows expected only in their situations | admin switch for 1867; games listed `ruby_refused` / `ruby_stuck` pinned `rust` first (§3.5) |
 | 3 | `RUST_ENGINE_TITLES=1830,1867`, `RUST_ENGINE_DEFAULT=rust` | client `engine_report` rows (`fallback` should be rare) | `RUST_ENGINE_DEFAULT=opal` (pages), or unset `RUST_ENGINE_TITLES` (the kill switch) |
 
 A bad engine build: re-pin `engine-rs/PINNED` to the previous commit and rebuild (as steps 1-2); the authority switch
@@ -777,11 +791,15 @@ the production steps (§12.4), the parent's.
 - **Known gaps after A (2026-11-27)**: generated games are not yet replayed through the site's Ruby by A (B's
   `ruby_verdicts.rb`, the Ruby check); the route check models neither lanes, local trains, intra-tile ambiguous
   connections (refused `unsupported`), double towns nor `check_overlap`'s off-centre town rule (none in 1830's or
-  1867's tiles); 1867's 5+5E through Toronto / Montreal is priced by the replay pricer (R6); a stored game whose replay
+  1867's tiles); a stored game whose replay
   stops is exit 3 (none today: §2.5); the bot view is matched on production's 31 games (23 finished), B's
   comparison covers every position; `site_engine serve` not built (§3.6); a 1830 move the menus don't
   offer and that isn't in §5.2's cross-player set is refused even where Ruby would take it (none in the 172,843 stored
   moves; the client's `engine_report` rows show any live one).
+- **After the verification (§16)**: the Programmer's shenanigan check compares an auto action (no id) and a program by
+  their times, as Ruby does, so an auto action and a program made in the same second count as simultaneous in both
+  engines (a fast repost shows it; play spaced by seconds doesn't); Opal's fallback hand still rings an 1867 hex no
+  tile can be paid for (the Rust menu has it in `tileDear`).
 
 ## 15. The record
 
@@ -830,3 +848,54 @@ the production steps (§12.4), the parent's.
   (9fc1b38) and G1 (e66ba2c), as §9.2 lists them; nothing in mcts.rs, mcts_lockstep.rs, the policy layouts or
   `site_rules`.
 
+
+## 16. The verification's findings (2026-11-27) and what each became
+
+Eight findings (A's five, B's three). Every fix of A is in `src/site` (no edit outside it: §9.2's list is unchanged,
+N3 and G1); the three neutrality pins pass unchanged at every commit (the `python` build doesn't compile `src/site`).
+
+| # | Finding | What it became |
+|---|---|---|
+| 1 (major) | The Programmer: after a minor won by a stock-round bid (Ruby's internal Par), Ruby disables another player's `program_share_pass` ("Corporation TGB parred"), Rust stored a pass (g1867_nationalization_cash@389; the next recorded move then refused) | **0a98cc2** (§5.3): Ruby's `win_bid` goes to the winner without setting up a turn and moves the round on only once the HomeToken step has the station; the site layer cleared the history at the bid and again from engine-rs's already-advanced entity. Now `StockHistory::held_at` keeps Ruby's index while the station is pending and every entity from the winner on is set up as `next_entity!` visits them; the internal Par compares later than any stored program (Ruby's `Time.now` at the request's load). Test `a_minor_won_at_auction_stops_a_share_pass_program` |
+| 2 (major) | R6: Rust counted a 5+5E stop on Toronto / Montreal as tokened if any city of the hex is; Ruby per city; with Rust in charge Rust's price is stored | **bcee0b1** (§6): fixed, not ruled: 1867 runs are priced over the stops the rebuilt route visits, each city's own station (`price_1867`; the key's `last_action` too, `price_stored_1867`). R6 is retired from §4.4 (B: a revenue difference is `unclassified` again). Test `a_5_5e_counts_the_station_of_the_city_it_visits`: the per-hex pricer filled the slot with Toronto's untokened city, Ruby's rule takes E15 |
+| 3 (minor, B) | `next-stack.sh` took its compose project from the folder's name: a scratch tree in a folder `next` recreated :9301 | B `e16f010`: `up` / `down` / `destroy` refuse 18xx-next-prod, 18xx-next off :9301, and any project whose rack or db container another folder started |
+| 4 (minor, B) | `rake dev_up` migrates down on a database past the build's newest: the dev rollback crash-looped after 0015 | B `ae3e633`: dev_up never down (as prod_up); DEPLOY.md: a head without the guard needs 0015 reverted by hand first (the SQL given there) |
+| 5 (minor, B) | The classifier: R1's nationalizing row unclassified; R8 without checking other paths; `error` rows class nil | B `4ca1b09`: the nationalizing move's row is R1 when Ruby's round is left on the company it reset (`stale_operator_after`); R8 only when the reason is the only difference; `error` rows `unclassified` |
+| 6 (minor) | 1867 moves Ruby's processing takes and Rust refuses (22 par cards Ruby's Par view never offers, 2 phase-8 buys at the limit): a 500 and a `rust_refused` row `unclassified` until R9 by hand | Accepted as the binding rulings and the menus' own model (Rust keeps refusing them). B `4ca1b09` classes them automatically from Ruby's views before the move: R9 when `ipo_type` isn't `:par` (`par_not_offered`), R7 when the company is at its train limit (`at_train_limit`) or crowded after |
+| 7 (minor) | Display gaps: (a) an unpayable 1867 hex in `tileHexes`; (b) 1867 liquidity at 1269@400; (c) the "2 trains rust" line without a minor's trains; (d) `bot_view` typing a player whose id equals a private's as a company | **07a7cb2** (§10): (a) such a hex is in `tileDear` at its cheapest lay's cost (terrain, the second lay's $20, the water borders the track completes); (b) a company counts once Ruby's `operated?` (its operating history: a major formed from a minor or reset is a new object); (c) a nationalized company's trains stay its own and rust under its name (`SiteGame::orphan_trains`), and the lay / interest lines of a company nationalized inside its own move say what Ruby says; (d) the entity typed from the step. B's `bot_view_from` correction stays (now a no-op) |
+| 8 (minor) | 1867's per-move time over the 100 ms p95 trigger on long 5-6 player games; a history jump near the end of gen-2053 ~1 s in wasm | **ae87eee**: the site layer's per-action bookkeeping (most of a 1867 `move`'s replay besides the engine's own) made cheap: the stations' cities recomputed only when a station or token moved, the vanished-train scans only when the train count dropped; `at` replays without the log and from two checkpoints kept near the live edge. `site_engine serve` stays specified, not built (§3.6): the trigger isn't met any more |
+
+**Checks at ae87eee** (scratch tools, the corpora of §2.2, cores 24-31,56-63 under load ~30):
+- Authority (`site_replay --authority`): :9301 1830 149,335 / 149,335 moves (autos 123 / 123), 1867 5,019 / 5,019
+  (autos 260 / 260, runs 515 / 515); production's 31 games (a fresh read-only export through the bot API, files 600,
+  deleted after) 18,489 / 18,489 (autos 570 / 570, every run's revenue as stored); 12 generated 1867 games 13,380 /
+  13,380 (407 / 407, 1,003 router runs at the router's price). Every position's key of the 1867 corpora, production's
+  games and 150 :9301 1830 games unchanged from 1088b50's.
+- Opal goldens: 1867 liquidity 2,036 / 2,036 (was 2,032), log steps 5,033 / 5,033 and lines 12,904 / 12,904 (were 5,029
+  and 12,900), snapshots 5,033 / 5,033, last run and tile counts 100%, menus 19,819 / 20,120 (one fewer than before: at
+  1269@173 Opal's hand rings N8, an Opal defect); 1830 unchanged (snapshots 82,083 / 82,083, menus 322,145 / 322,150,
+  liquidity 32,805 / 32,805, log lines 171,590 / 171,590).
+- `site_engine move` on each game's last engine move (wall, min of 3): gen-3004 (6 players) 77 -> 59 ms, gen-3010 60 ->
+  44 ms, :9301 1269 51 -> 36 ms, 1218 34 -> 26 ms, production 33 43 -> 33 ms, gen-2053 195 -> 184 ms, 1119 17 -> 17 ms.
+  wasm (node, the client's batches of 80): gen-2053 `at(end-3)` 635 -> 97 ms, the worst jump sampled every 37 actions
+  635 -> 89 ms; memory unchanged (gen-2053 23.3 MB, 1119 20 MB).
+- B's scratch stack (:9397, `next/rust-authority` with this pin, 1830 and 1867 on Rust, the Ruby check on): the fixture
+  g1867_nationalization_cash reposted whole by the test users (one move a second, so the server's times order the
+  programs as the source's minutes did): 668 / 668 stored actions as recorded (auto actions included; the fixture's
+  blanked reasons aside), finished with the source's result, the Ruby check 668 / 668 `equal`; walk-105-4p: its
+  nationalizing move's row R1 (was unclassified), the next move `ruby_refused` R1; a par card on a minor in phase 4
+  (1219's first 390 actions reposted): 500, row `rust_refused` R9 by itself; a phase-8 buy at the limit (1219 to 700):
+  500, row R7; gen-3004 reposted with two bot seats: Rust's engine time p50 36 / p95 66 / max 97 ms (was 75 / 134 /
+  213), the Ruby check 1,345 / 1,345 `equal`. Ruby's bot view against Rust's without B's correction, every position of the stack's 21 1867 games: 10,219 /
+  10,220 byte-equal (the one: walk-105's R1 position); 25 1830 games every 3rd position 1,638 / 1,638.
+- C's `parity.cjs --title 1867 --all --full` (the wasm package of B's build): details 813 / 813 (was 810), the site's
+  games' log lines 12,904 / 12,904 and steps 5,033 / 5,033, menus and hands one fewer (1269@173's `tileDear`), the rest
+  as before (living-board `rust-authority` 7b76807, docs only: nothing to change in the client).
+- Gate at ae87eee: `cargo test --release --no-default-features --features python` 273 passed / 0 failed / 11 ignored,
+  `--features site` 308 / 0 / 11 (the 1830, 1867 and 1822 neutrality pins unchanged), the wasm checks (`wasm,site-titles`,
+  `wasm`) and the default `cargo check` clean; `uv sync` and the full `pytest tests/` in this worktree's venv:
+  **1,822 passed, 7 skipped, 0 failed** (23:42).
+
+Known gaps left (§14 updated): the Programmer's shenanigan check is time-sensitive where Ruby's is (an auto action and a
+program made in the same second compare as simultaneous in both engines: a fast repost shows it, real play doesn't);
+`site_engine serve` not built; Opal's hand still rings an unpayable hex (the fallback only).
