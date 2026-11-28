@@ -20,8 +20,8 @@ a side's first N decisions). All of a worker's searches run in lockstep (``locks
 per round and network: ``--games-per-task`` games' leaves together), on generic inference servers with ``--server``
 (one per checkpoint of a searched side: its policy and its critic), else in the workers. A side keeps its tree while
 the game's position is its root (its own consecutive decisions). Which side decides a position is the deciding
-player's (``engine_rs.mcts_decider_id``: the encoder's mover, except 1867's stock-round home token, which the opening
-bidder chooses -- the encoder names nobody there and seat 1 used to choose for every side).
+player's (``engine_rs.mcts_decider_id``: the encoder's mover; at 1867's stock-round home token the opening bidder, whom
+the encoder also names since 2026-11-27 -- before that it named the first player, who chose for every side).
 
     uv run python scripts/eval_generic.py --title 1867 --num-players 4 --games 480 --server --games-per-task 8 \
         --match "generic:$R/learner/2000.pth+generic:$R/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5" \

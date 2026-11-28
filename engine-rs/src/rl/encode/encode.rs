@@ -248,6 +248,23 @@ impl BaseGame {
             return None;
         }
         if self.g1822.is_none() {
+            // 1867's stock-round home token (HOME_TOKEN_TIMING = :par): a
+            // minor's home city is chosen by the player who opens its auction
+            // (a major's by the player who pars it), before anyone else bids
+            // and while the corporation has no owner, so the active entity
+            // names nobody; the chooser is recorded with the pending token.
+            // Until 2026-11-27 this fell back to seat 0 (the first player):
+            // every 1867 run before then encoded and credited those choices
+            // as the first player's. Same blocking order as `rl_step_kind_at`
+            // (a trainless major first). Only 1867 queues stock-round home
+            // tokens (rounds/stock_bid.rs), so 1830 is unchanged.
+            if let Round::Stock(s) = &self.round {
+                if self.trainless_major.is_empty() {
+                    if let Some(&(_, chooser)) = s.pending_home_tokens.first() {
+                        return Some(chooser);
+                    }
+                }
+            }
             return self.acting_player_id_pub();
         }
         use crate::g1822::Ent;

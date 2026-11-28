@@ -2573,15 +2573,22 @@ servers. 1830's path is unchanged (its tree is `TreeMoves::Factored`, every bran
   placement-score head; a finished game backs up placement points by net worth when the critic's run trained a
   placement reward (`composite_model.terminal_utility`, the game's own player count).
 * **Who decides** (whose value a node backs up): the encoder's mover (`rl_mover_id`: 1867's
-  `acting_player_id_pub`, a corporation's turn its president; the 1822 family's active step entity's), **except
-  1867's stock-round home token**. With `HOME_TOKEN_TIMING = :par` a minor's home city is chosen by its opening bidder
-  before the minor has an owner, and the encoder names nobody there: seat 0, the first player. The tree uses the
-  chooser recorded with the pending token (`generator_decider_id`, `engine_rs.mcts_decider_id`). Checked at every
-  position of the 1867 fixture games (2,212 positions, all step kinds the fixtures reach, 62 home tokens: before the
-  fix 41 of them were attributed to the first player) and on random walks (`generator_tests`). **Training note, not
-  changed here**: the generic encoder and `generic_pg.mover_seat` read the same fallback, so the 1867 PG runs played
-  and credited each minor's home-token choice as the first player's, whoever bid (`eval_generic.py` did too until
-  now: it gives the decision to the decider's side).
+  `acting_player_id_pub`, a corporation's turn its president; the 1822 family's active step entity's;
+  `generator_decider_id`, `engine_rs.mcts_decider_id`). **1867's stock-round home token**: with
+  `HOME_TOKEN_TIMING = :par` the player who opens a minor's auction picks its home city right after the opening bid,
+  before anyone else bids (everyone bids knowing the location; a major's home: the player who pars it), while the
+  corporation has no owner -- the active entity names nobody, so `rl_mover_id` reads the chooser recorded with the
+  pending token. Checked at every position of the 1867 fixture games (2,212 positions, all step kinds the fixtures
+  reach, 62 home tokens; the encoder's seat 0 too, `test_the_tree_backs_up_the_value_of_the_player_deciding`) and on
+  random walks (`a_minors_home_token_is_its_opening_bidders_choice`). **The home-token bug (fixed 2026-11-27)**: until
+  then the encoder fell back to seat 0, the first player, at those positions (41 of the fixtures' 62 home tokens), so
+  every 1867 model so far -- SL data, `gpg1867_*` PG runs, their critics -- saw a home-city choice as the first
+  player's: in PG the first seat's network chose every minor's home city (`generic_pg.mover_seat`) and was credited
+  with it, and a bot not seated first picked its own minor's home city as though it were the first player. The tree
+  named the right chooser from its first version (bee0b6f); the encoder since 2026-11-27. Only those positions
+  changed (1867 walks: 22 / 17 / 24 home-token positions' encodings moved, the other 1079 / 1038 / 1149 digested the
+  same; `v1_columns_of_1830_and_1867_unchanged` re-taken); 1830 and the 1822 family (no home-city choice: their minors'
+  homes are printed) are untouched.
 * **Lockstep**: `mcts_collect_leaf_games` returns each generator leaf's `price_ranges` (`(lo, hi, step)` per legal
   move), so `GenericEvaluator` builds the leaves' legal inputs without generating the moves again
   (`model_generic.legal_actions_with_ranges`); its reply for a generator title carries `price_rows` /

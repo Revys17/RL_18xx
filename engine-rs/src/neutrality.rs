@@ -423,34 +423,37 @@ fn cases_1867() -> Vec<(u32, u64, bool, Pick)> {
 }
 
 /// (players, seed, rules policy?, pick, digest): pinned before any 1867 site change (the 1867 note above), on
-/// site/engine-rs-1830 f6a9fe5 = RL_18xx origin/master cd97116 for 1867.
+/// site/engine-rs-1830 f6a9fe5 = RL_18xx origin/master cd97116 for 1867. Re-pinned 2026-11-27 for the home-token
+/// mover fix (the encoder's seat 0 at a stock-round home token is the auction's opener, not the first player): the
+/// walks' legal moves, prices, actions and results digested the same before and after with the encodings left out of
+/// the hash; only the sampled encodings moved.
 #[rustfmt::skip]
 const PINNED_1867: &[(u32, u64, bool, Pick, u64)] = {
     use Pick::*;
     &[
         (3, 1867, false, Busy, 0x7db4f9779a9b08db), // 1101 moves, finished in phase 8
         (4, 1868, false, Uniform, 0x376ce18523e651a8), // 1187 moves, finished in phase 8
-        (5, 1869, true, Busy, 0x6887c359d4626858), // 2099 moves, finished in phase 8
-        (6, 1870, false, Uniform, 0xd56b0baa95c19e11), // 1596 moves, finished in phase 8
-        (3, 1871, false, Busy, 0x1f7a57bf6e45093d), // 1126 moves, finished in phase 8
-        (4, 1872, true, Uniform, 0xdaa5b31860f9394b), // 1477 moves, finished in phase 8
-        (5, 1873, false, Busy, 0x4837b8b9e063061d), // 1093 moves, finished in phase 8
-        (6, 1874, false, Uniform, 0x728db9de668b1221), // 1469 moves, finished in phase 8
-        (3, 1875, true, Busy, 0xae71d5b0433eefa2), // 1303 moves, finished in phase 8
+        (5, 1869, true, Busy, 0xc1e1540552f36075), // 2099 moves, finished in phase 8
+        (6, 1870, false, Uniform, 0xe1675af391e5d6fc), // 1596 moves, finished in phase 8
+        (3, 1871, false, Busy, 0x435d643d82e39837), // 1126 moves, finished in phase 8
+        (4, 1872, true, Uniform, 0xa475cb16b8daa836), // 1477 moves, finished in phase 8
+        (5, 1873, false, Busy, 0x15c25aa52caba9f9), // 1093 moves, finished in phase 8
+        (6, 1874, false, Uniform, 0x3415c61d98313f95), // 1469 moves, finished in phase 8
+        (3, 1875, true, Busy, 0xc4726da861800619), // 1303 moves, finished in phase 8
         (4, 1876, false, Uniform, 0x0e079ef1c44fa84e), // 1124 moves, finished in phase 8
-        (5, 1877, false, Busy, 0xc95c5f94cb505817), // 1213 moves, finished in phase 8
+        (5, 1877, false, Busy, 0x2915d01c21c47377), // 1213 moves, finished in phase 8
         (6, 1878, true, Uniform, 0x180b7add8fdcc5b3), // 1491 moves, finished in phase 8
         (3, 1879, false, Busy, 0xcd655fe7d16ec0a2), // 1013 moves, finished in phase 8
-        (4, 1880, false, Uniform, 0xb32b9e275eba6be5), // 1339 moves, finished in phase 8
-        (5, 1881, true, Busy, 0xda4aeff83553765e), // 1583 moves, finished in phase 8
-        (6, 1882, false, Uniform, 0xbe618483e1a2379c), // 1216 moves, finished in phase 8
-        (3, 1883, false, Busy, 0xe4ff25dfa295daed), // 938 moves, finished in phase 8
-        (4, 1884, true, Uniform, 0x44fea0494724e0dc), // 1588 moves, finished in phase 8
-        (5, 1885, false, Busy, 0x3da3efa405e71b1a), // 1191 moves, finished in phase 8
-        (6, 1886, false, Uniform, 0xb13b31b73276163c), // 1526 moves, finished in phase 8
-        (3, 1887, true, Busy, 0xe9bc439861f4544d), // 1327 moves, finished in phase 8
-        (4, 1888, false, Uniform, 0x22d23815933efc22), // 1073 moves, finished in phase 8
-        (5, 1889, false, Busy, 0xef94e199cbaf37c3), // 1163 moves, finished in phase 8
+        (4, 1880, false, Uniform, 0xffd6cb74778b7a4d), // 1339 moves, finished in phase 8
+        (5, 1881, true, Busy, 0x7b8504182f23ff8f), // 1583 moves, finished in phase 8
+        (6, 1882, false, Uniform, 0x8830be9e433bb896), // 1216 moves, finished in phase 8
+        (3, 1883, false, Busy, 0x84a6725a330320ea), // 938 moves, finished in phase 8
+        (4, 1884, true, Uniform, 0x532ffde55cce88f6), // 1588 moves, finished in phase 8
+        (5, 1885, false, Busy, 0x709b91ced2c1c82a), // 1191 moves, finished in phase 8
+        (6, 1886, false, Uniform, 0x0317870dacdf0739), // 1526 moves, finished in phase 8
+        (3, 1887, true, Busy, 0x9b5a155fc41dc306), // 1327 moves, finished in phase 8
+        (4, 1888, false, Uniform, 0x8b5c53211cea3c87), // 1073 moves, finished in phase 8
+        (5, 1889, false, Busy, 0x742e9996dfbee342), // 1163 moves, finished in phase 8
         (6, 1890, true, Uniform, 0x93b4a1efcd8b4707), // 1814 moves, finished in phase 8
     ]
 };

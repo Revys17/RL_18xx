@@ -115,7 +115,8 @@ def _controller(raw, wire):
 
 def test_the_tree_backs_up_the_value_of_the_player_deciding():
     """At every position of the fixture game the tree's mover is the player who controls the moves' entity; at a
-    stock-round home token (a minor's, before it has an owner: the encoder names nobody) the opening bidder."""
+    stock-round home token (a minor's, chosen before anyone else bids and before it has an owner) the opening bidder;
+    the encoder's seat 0 is the same player (until 2026-11-27 it was the first player at those home tokens)."""
     game, log = _record()
     raw = position(0)
     steps, home_tokens = set(), 0
@@ -125,6 +126,8 @@ def test_the_tree_backs_up_the_value_of_the_player_deciding():
             ids = sorted(p.id for p in raw.players)
             mover = ids[engine_rs.RustMCTSPlayer(raw).root_active_player_index()]
             assert engine_rs.mcts_decider_id(raw) == mover
+            # the network's seat 0 (the encoder's mover; generic_pg.mover_seat credits the decision to it)
+            assert int(raw.players[int(encode_batch([raw])["meta"][0, 5])].id) == mover, k
             if moves[0]["step"] == "HomeToken" and raw.round.round_type == "Stock":
                 opening = [a for a in raw.raw_actions if a.get("type") in ("bid", "par")][-1]
                 assert mover == int(opening["entity"]), k

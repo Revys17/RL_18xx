@@ -970,16 +970,19 @@ fn walk_digest(title: &str, players: usize, seed: u64, max_moves: usize) -> (u64
 /// appended since is zero (pointers -1) for them. The 1830 walk sorts the
 /// factored choices (their order varies run to run). A rules or generator
 /// change that moves these walks changes the digests too: re-take them from
-/// the previous encoder then.
+/// the previous encoder then. 1867's were re-taken on 2026-11-27, when seat 0
+/// at a stock-round home token became the auction's opener (it was the first
+/// player): the walks' other positions digested the same before and after
+/// (22 / 17 / 24 home-token positions changed, 1079 / 1038 / 1149 did not).
 #[test]
 fn v1_columns_of_1830_and_1867_unchanged() {
     let cases: &[(&str, usize, u64, u64)] = &[
         ("1830", 3, 11, 0x4e5ffe06818115bc), // 1201 positions
         ("1830", 4, 12, 0x5286124f68fa3a35), // 1013 positions
         ("1830", 6, 13, 0x819db69a44ebc66d), // 1029 positions
-        ("1867", 3, 11, 0x6a9d8cfe150c499d), // 1102 positions
-        ("1867", 4, 12, 0xebde5d1d8daac446), // 1056 positions
-        ("1867", 6, 13, 0xf704ab16dc35a2f7), // 1174 positions
+        ("1867", 3, 11, 0x646ba4e8da5fd4de), // 1102 positions
+        ("1867", 4, 12, 0xf50aa390795692cd), // 1056 positions
+        ("1867", 6, 13, 0x20ea23559a263c91), // 1174 positions
     ];
     let mut got = Vec::new();
     for &(title, players, seed, want) in cases {

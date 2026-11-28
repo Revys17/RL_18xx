@@ -158,20 +158,10 @@ impl GenMoves {
 }
 
 /// The player who decides a generator title's position -- whose value a
-/// search node backs up: the encoder's mover (``rl_mover_id``), except 1867's
-/// stock-round home token. With ``HOME_TOKEN_TIMING = :par`` a minor's home
-/// city is chosen by its opening bidder (a major's by the player who pars it)
-/// while the minor has no owner yet, so the encoder has no mover there (seat 0
-/// by default: the first player); the chooser is recorded with the pending
-/// token. None for a finished game.
+/// search node backs up: the encoder's mover (``rl_mover_id``; 1867's
+/// stock-round home token is its opening bidder's choice, recorded with the
+/// pending token). None for a finished game.
 pub fn generator_decider_id(game: &BaseGame) -> Option<u32> {
-    if game.g1822.is_none() && !game.finished {
-        if let crate::rounds::Round::Stock(s) = &game.round {
-            if let Some(&(_, chooser)) = s.pending_home_tokens.first() {
-                return Some(chooser);
-            }
-        }
-    }
     game.rl_mover_id()
 }
 
@@ -536,9 +526,9 @@ impl RustMCTSPlayer {
         player_ids.sort_unstable();
         // The player deciding here, whose value the node backs up
         // (``generator_decider_id``): the encoder's mover -- 1867's
-        // ``acting_player_id_pub`` (a corporation's turn: its president), the
-        // 1822 family's active step entity's -- except 1867's stock-round home
-        // token, chosen by the opening bidder before the minor has an owner.
+        // ``acting_player_id_pub`` (a corporation's turn: its president; a
+        // stock-round home token: the opening bidder), the 1822 family's
+        // active step entity's.
         let active_pid = generator_decider_id(&game).unwrap_or(player_ids[0]);
         let active_player_index = player_ids.iter().position(|&p| p == active_pid).unwrap_or(0);
         let num_players = player_ids.len();
@@ -3089,6 +3079,10 @@ mod generator_tests {
                         let player = RustMCTSPlayer::from_game(g.clone_for_search(), None, None, None, None).unwrap();
                         let root = &player.arena[player.root_idx];
                         assert_eq!(root.active_player_index, (chooser - 1) as usize);
+                        // the encoder's seat 0 is the chooser too (it was the first player)
+                        assert_eq!(g.rl_mover_id(), Some(chooser));
+                        let enc = g.encode_tokens();
+                        assert_eq!(g.players[enc.meta[5] as usize].id, chooser);
                         found += 1;
                         not_first += usize::from(chooser != 1);
                         break;
