@@ -450,6 +450,28 @@ fn posted_runs_are_stored_in_a_form_ruby_rebuilds() {
     assert_eq!(routes(&s), routes(&best), "a local run's connection the wrong way round: the router's form");
 }
 
+/// A position where only other players' trains are within reach (a 1822CA game the generator played under Ruby's
+/// set, `site_replay --generate-1822 --rules-policy`, seed 5004, cut at action 964: minor 3 must buy a train after
+/// cross-player trades): the menu offers nothing and says the site's own-only rule holds the game, with the deals left
+/// out named -- not the "(Ruby raises)" words of a candidate of the player's own, which the page would present as a
+/// Ruby dead end waiting for an engine update (engine-rs's RESTRICTED generator offers those deals here).
+#[test]
+fn only_cross_player_deals_left_says_so() {
+    let p = format!("{}/site/fixtures/g1822_gen/gen-1822CA-5004-964.json", env!("CARGO_MANIFEST_DIR"));
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let mut g = SiteGame::load(&data).unwrap();
+    g.run_to(None);
+    assert!(g.stopped.is_none(), "{:?}", g.stopped);
+    let pids = super::active_players(&g);
+    let m = super::menu::menu(&mut g, pids[0]);
+    assert_eq!(m["moves"], json!([]), "{m}");
+    assert_eq!(m["deadEnd"], json!("The only moves left are deals with other players' companies, which this site doesn't offer"));
+    assert!(m["othersLeftOut"].as_array().is_some_and(|v| !v.is_empty() && v.iter().all(|x| x["kind"] == "train")), "{m}");
+    // the engine's RESTRICTED set falls back to Ruby's set here: those deals
+    let restricted = g.game.g1822_legal_moves_with(CrossPlayerPolicy::RESTRICTED);
+    assert!(!restricted.is_empty() && restricted.iter().all(|x| x.action.action_type() == "buy_train"));
+}
+
 /// Debugging aid: every recorded run of the fixtures at its position -- the posted routes, the router's (autoRoute) and
 /// what `checked_run` stores or why it refuses -- one JSON line each (G1822_OUT).
 #[test]
