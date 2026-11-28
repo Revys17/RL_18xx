@@ -2629,6 +2629,14 @@ CPU dry run (2026-11-27, tiny untrained 1867 networks, `--auction-start --max-de
 (2 workers x 3 games) in 10 s and 4 1v3 games on spawned generic servers in 11 s, every game to its decision cap, the
 searched side's decisions all searched (`search` in each record: decisions, kept trees).
 
+Results (2026-11-28, `logs/eval/g1867_search_u2000/2v2_ptemp{0.5,1.0}`: `--workers 8 --games-per-task 8
+--auction-start --max-decisions 1200`, 4 players, the searched side 2 seats of 4, every game finished): searched u2000
+(learner + critic/2000 `#score@400`, the bots' settings) beat policy-only u2000 at T 0.5 **.817 +- .025** with priors at
+T 0.5 and .813 +- .025 at T 1.0 (worth share .521 / .515; every seating arrangement .70-.90); ~660 decisions a game.
+T 1.0 is no better here, so the bots search at the run's own 0.5. Wall time: 12.0 / 12.4 h for the two matches run
+side by side on a GPU the 1822 policy-gradient run kept at 100% (their servers got the GPU in ~14% of samples), against
+the ~1.5 GPU-hour estimate for one match alone.
+
 ### Bots: `--title-search`
 
 ```bash
@@ -2647,6 +2655,13 @@ move is the most visited Ruby-safe move (the MajorTrainless dead end is never pl
 open price the most visited price grandchild's, and the auction keep-back applies as before. `/api/health` and the
 admin page show the label (`generic:<run>/learner/<u>@0.5 + search generic:<run>/critic/<u>#score@400 (prior T
 0.5)`); a move result's `kind` is `search` with `share` = the move's share of the root visits and `visits`.
+
+Deployed 2026-11-28 on both local sites' bot services (the user's OK, 2026-11-27, once search beat policy-only):
+`--title-policy 1867=<bots>/gpg1867_a4_20261122/learner/2000.pth --title-search
+"1867=generic:<bots>/gpg1867_a4_20261122/critic/2000.pth#score@400/0.05:mean,dedupe,par=8,ptemp=0.5"`, deployment
+advisor-20261127b (341e352, with the home-token mover fix); a searched move of the fixture game took 4.2-5.0 s on the
+service's settings (4 threads, CPU, the machine loaded). Switch / rollback (to u1200 policy-only):
+`~/longrun/experiments/bots_1867u2000search_20261127/switch.sh`.
 
 ### Cost per searched move (CPU)
 
