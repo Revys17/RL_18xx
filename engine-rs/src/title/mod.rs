@@ -631,11 +631,11 @@ pub fn all_titles() -> &'static [&'static dyn GameTitle] {
         ];
         &TITLES
     }
-    // The wasm package trimmed to the site's titles (site/build-site.sh, docs/SITE_ENGINE_RS_1867.md §3.10): the
-    // other titles left out of the registry.
+    // The wasm package trimmed to the site's titles (site/build-site.sh, docs/SITE_ENGINE_RS_1867.md §3.10; 1822 and
+    // 1822CA: docs/SITE_ENGINE_RS_1822.md §4.4, P4): the other titles left out of the registry.
     #[cfg(all(not(test), feature = "site-titles"))]
     {
-        static TITLES: [&'static dyn GameTitle; 2] = [&G1830, &g1867::G1867];
+        static TITLES: [&'static dyn GameTitle; 4] = [&G1830, &g1867::G1867, &g1822::G1822, &g1822ca::G1822Ca];
         &TITLES
     }
     #[cfg(all(not(test), not(feature = "site-titles")))]
