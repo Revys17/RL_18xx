@@ -1,6 +1,9 @@
 # The site on engine-rs, step 4: 1822 and 1822CA (plan)
 
-Status: **plan, 2026-11-27** (branch `site/engine-rs-1822-plan`, RL_18xx worktree `.claude/worktrees/site-1822-plan`, on
+Status: **plan, 2026-11-27; package A (engine) built 2026-11-28** (§8: branch `site/engine-rs-1822`, RL_18xx worktree
+`.claude/worktrees/site-engine-1822`, on step 3a's rebased head fa11715). The plan below is unchanged; §8 is the record of
+what was built, the edits outside `src/site` function by function, the Ruby diff, the RESTRICTED-vs-menu comparison and
+the gaps. Original status: plan, 2026-11-27 (branch `site/engine-rs-1822-plan`, RL_18xx worktree `.claude/worktrees/site-1822-plan`, on
 `site/engine-rs-1867` b4b2391). Approved by Caleb: after the site's move to engine-rs (steps 1-3), 1822 and 1822CA
 become playable on 18xx.revys.net (`rl18xx-next`), with bots once the RL session's 1822 model is ready (run
 `gpg1822_a4_20261127`, started 2026-11-27 13:12). This document is read-only research plus a plan: nothing is built
@@ -520,3 +523,193 @@ and the RL session's confirmation that the deployed driver plays 1822.
 - The Opal hand: living-board `test/titles_engine.cjs --base http://127.0.0.1:9301` (LIST_ONLY=1, `TMPDIR=$RUST4/tmp`).
 - wasm: `git archive` of b4b2391's `engine-rs` twice into `$RUST4/wasm`, one patched (P4 + P5 + a scratch export
   linking the generator and router), both built as `site/build-site.sh` does.
+
+---
+
+## 8. Package A as built (2026-11-28)
+
+Branch `site/engine-rs-1822` (RL_18xx worktree `.claude/worktrees/site-engine-1822`), on step 3a's rebased head
+fa11715. Scratch: `$RUST4/A` (builds, generated games, reports), packages `$RUST4/pkg/<commit>` (`current` the last).
+Every build, test and sweep under `taskset -c 24-31,56-63 nice -n 19`, no GPU.
+
+### 8.1 Commits
+
+| Commit | What |
+|---|---|
+| fbad02a | **P5** (outside `src/site`): the 1822 generator's and router's timer readings through `crate::clock` |
+| f1ad358 | **P4** (outside `src/site`): the `site-titles` registry adds 1822 and 1822CA |
+| ab767fa | **V3** (outside `src/site`): `g1822_routes_subsidy` visible to the crate |
+| 2246712 | the 1822 site layer, first cut (`src/site/g1822/*`, the shared entry points' dispatch, the site fixtures, tests) |
+| e875f02 | the log lines; generated games (`site_replay --generate-1822`) |
+| ea434f2 | key and static fixes (par of always_market_price companies, laid tiles only, 1822CA's DD blocker, the destination token in tokenCount, a minor's per-share payout, the dead end's words) |
+| b455965 | the RESTRICTED-vs-menu check as a module (`g1822/check.rs`) and `site_replay --restricted-check`; the liquidity column by seat |
+| e61aeb0 | the menus say why when only cross-player deals are left; the check lists the generator's fallbacks |
+| 11e3ca9 | a manual end's player values in the site's ids |
+| (this) | this record (§8) |
+
+### 8.2 Every edit outside `src/site`, function by function (for the training session)
+
+| # | Commit | File | Function(s) | Edit |
+|---|---|---|---|---|
+| P5 | fbad02a | `engine-rs/src/g1822/legal.rs` | `g1822_validate`, `gen_corp_lays`, `lay_passes_restrictions` (the restriction walk's wrapper) | `std::time::Instant::now()` → `crate::clock::Instant::now()` (3 sites). The readings feed `stats::VALIDATE_NS`, `LAYS_NS`, `RESTRICT_NS` only |
+| P5 | fbad02a | `engine-rs/src/g1822/router.rs` | `g1822_best_routes_v2` (the `walk` closure's `t_walk`; the scout and full combines' `t0`) | the same (3 sites); the readings feed `G1822_ROUTER_DEBUG`'s eprintln only |
+| P5 | fbad02a | `engine-rs/src/g1822/prof.rs` | `start`, `stop` | the type `Option<std::time::Instant>` → `Option<crate::clock::Instant>` (3 sites); profile counters only |
+| P4 | f1ad358 | `engine-rs/src/title/mod.rs` | `all_titles` | the `#[cfg(all(not(test), feature = "site-titles"))]` arm: `[G1830, G1867]` → `[G1830, G1867, G1822, G1822Ca]` (the default and test registries unchanged) |
+| V3 | ab767fa | `engine-rs/src/g1822/operating.rs` | `g1822_routes_subsidy` | `fn` → `pub(crate) fn`, body unchanged (the stored run's mail-contract `subsidy`, as Ruby's RunRoutes stores it) |
+
+No H6 record hook was needed (§4.4): the operating history and the players' values are observed by the site layer.
+Site tooling only, not engine code: `engine-rs/src/bin/site_replay.rs` (the `site` feature's own binary) gains
+`--generate-1822` and `--restricted-check`. Nothing touches policy layouts, `mcts*.rs`, the encoder, `action_index.rs`,
+`src/rl`, Python or Ruby. `crate::clock` on native is a re-export of `std::time::Instant`, so P5 is the same code there.
+
+**Neutrality**: the three pins of `engine-rs/src/neutrality.rs` (1830, 1867, 1822) pass unchanged after P5 (site build)
+and at the head in both builds (§8.6). The 1822CA generator and router, which P5 also touches and no pin covered, have
+their own pin inside `src/site` (`g1822::tests::ca_walks_are_pinned`: four fixed-seed walks, 3-6 players, both
+policies, 700 moves each): its digests were computed on the three g1822 files of fbad02a's parent (before P5) and are
+equal after it (0xf3992ff745f9075c, 0xc645efc85ef47ac4, 0x160839b73374634a, 0x486dd74f0ab54232).
+
+### 8.3 The Ruby diff (engine-rs's reference 46a592e vs the site's 24e59e1 and the fork)
+
+`diff -r` of the clone at 46a592e (the training session's rig) against rl18xx-next's `lib/engine` (24e59e1 plus the
+fork's commits): **no difference in `lib/engine/game/g_1822/` or `g_1822_ca/`**. The shared engine files that differ, and
+what each means for the family (saved as `$RUST4/A/ruby_diff_shared.txt`):
+
+| File | Change | 1822 / 1822CA |
+|---|---|---|
+| `game/base.rb` `revenue_str` | `route.hexes` → `route.visited_hexes` (the fork: a stop visited twice shows twice) | **display**: G1822 / G1822CA call `super`, so a run's string follows the connections' nodes; the site layer writes it that way (`act.rs visited`). Old records keep their strings (50 of the fixtures' accepted runs: order only) |
+| `action/run_routes.rb` | a stored route with fewer hexes than nodes takes its hexes from the track (the fork) | replay of stored records only; the site layer uses the router's hexes for such a route |
+| `route.rb` | `check_double_towns!`, `visited_hexes`, a nil guard in `touch_node` | no double towns on either map: no effect |
+| `game/base.rb` `upgrades_to?` | double towns' count must match | none on either map: no effect |
+| `game/base.rb` neighbours | a gray/red/blue neighbour with a stub back to the hex stays a neighbour | 1822's stubs are on white hexes (L37, L39, M36, M40, N37, N39), 1822CA has none: no effect |
+| `action/choose.rb` | optional `target` / `target_type` | the family's choices name no target: no effect |
+| `hex.rb`, `tile.rb`, `part/*.rb` | patronage, `double_town`, label `loc`, path `color` | features no 1822 map uses: no effect |
+| `step/waterfall_auction.rb`, `auto_router.rb`, `logger.rb` | the auction lock, MRI's JS guard, log levels | not reached by the family |
+
+**No rules difference**: nothing to report beyond the revenue string, which the site layer follows.
+
+### 8.4 What the site layer does (`src/site/g1822/*`)
+
+| Module | |
+|---|---|
+| `mod.rs` | titles `1822` (2-7, its four rules, any combination) and `1822CA` (2-7, none); Ruby's seed; **seat ids** (`SiteGame::seat_offset` 1000: every player id in, every id out, at every boundary; 1830 / 1867 keep 0); the active step and entity, Ruby's step class names, `active_players` (DiscardTrain: every crowded company's president), `ruby_actions`, Ruby's corporation list (1822CA's DD blocker left out), the bot view |
+| `apply.rs` | one engine action: `combo_entities` and a bundle's `share_price` handed to the engine as the Python bridge does; the records (operating history with the run's revenue and Ruby's kind, a minor's automatic `half` / `withhold`; players' values at each round's end and at the end); the turn in progress; the Programmer's `players_history` (bids included) and G1822's stored winning bids; programs disabled at a round change (`check_programmed_actions`); companies' order, last runs and lays; the log |
+| `act.rs` | the authority's check: the posted move must match a move of the generator's **Ruby set** (`RULES`; an Opal page or a bot may post a cross-player deal) on the importer's key, a ranged move by range and step; the stored action is the generator's wire (site ids) with the posted price. **A run must be the router's** (the same trains over the same stops, in any order and direction), stored as posted with Ruby's fields (each route's revenue by the engine's Ruby pricer in the posted order, `revenue_str` with the destination bonus, 1822CA's sawmill and grain / port parts, `extra_revenue` 0, the mail contracts' `subsidy`). The dead ends' words (`dead_end`) |
+| `autos.rs` | Ruby's step auto actions (DestinationToken, MinorAcquisition, P9 / CA P7) and the Programmer on G1822's stock round (`program_share_pass`, `program_buy_shares`, the shenanigan reasons incl. "No longer winning bid on X") |
+| `menu.rs` | RawMenu (§8.5) |
+| `view.rs` | the Snapshot (shared fields, players in Ruby's `@players` order) + `g1822`; StaticInfo's engine part; round info, Ruby's step descriptions and pass descriptions |
+| `key.rs` | the shadow key: v2 + the family's fields (§4.3; the Ruby expression of each in the module doc) |
+| `log.rs` | Ruby's templates for the main beats (§8.7 gaps) |
+| `generate.rs`, `check.rs` | generated games; the RESTRICTED-vs-menu check |
+
+`site_rules`: no branch (§4.4). Shared entry points dispatch by `g1822.is_some()`: `SiteGame::load / apply / apply_engine /
+result / end_reason`, `view::snapshot / static_info / step_json`, `menu::menu / tile_options / auto_route / legal_actions`,
+`shadow::key`, `authority::check / entity_player / ruby_active_players / bot_view / finished_acting`, `details::meta /
+details / program_info / liquidity`, `programs::auto_actions / stock_turn / owner / sale_timing / shenanigan / observe`,
+`json::action_from_json` (+ `choose_ability`, `acquire_company`, `hex_token`, `payoff_player_debt(_partial)`, `assign`).
+1830 and 1867 keep their paths (every step-1/2/3a suite passes unchanged).
+
+### 8.5 API additions (contracts K1'/K3'/K4/K10/K12 for B and C)
+
+- **Version**: `titles` = `["1830","1867","1822","1822CA"]`; api 3 and key 2 unchanged; WasmGame's methods unchanged.
+- **Snapshot**: `players[].debt`; `corps[].type` (`minor` / `major`); `companies[]` in Ruby's `@companies` order with
+  `bank` (a bid-box lot); `hexes[h].tileRes` (London's tile reservation); `round.name` "Stock Round" / "Choose" /
+  "Operating Round"; and **`g1822`**: `bidBoxes {minors, concessions, privates}`, `bids [{company, player, price}]`,
+  `stacks`, `bankOwned`, `biddingTokens {player: left}`, `biddingTokensTotal`, `bidsPerTurn`, `bidStep`, `committed
+  {player: cash}`, `debt {player: owed}`, `taxHaven {company, owner, cash, shares}`, `credits {company: cash}`,
+  `exchangeTokens`, `destinations {major: {hex, placed}}`, `plus`, `currency`; 1822CA `sawmill {hex, owner, bonus}`.
+- **StaticInfo**: corporations' `type`, `destination`, `exchangeTokens`, `tokenCount` incl. the destination token;
+  companies' `kind` (minor / concession / private) and 1822+ `category` (train / track / other); trains' `multiplier`,
+  `events`, `unlimited`; phases' `minorTrainLimit`, `operatingRounds`, `status`, `on`; `layout` flat; `currency`
+  £%s / $%s; `optionalRules`; `biddingTokens`.
+- **RawMenu** (every move also in `moves: [{type, action, range: {min, max, step} | null}]`; `step` the step's class):
+  `bidBoxes {boxes: [{kind, category?, lots: [{sym, kind, name, value, minBid, maxBid, high {player, name, price} | null,
+  mine, canBid, why (high / debt / turn / tokens / cash / certs / other), action, range}]}], tokens {left, total},
+  committed, cash, available, bidsThisTurn, perTurn, step}`; `par [{corp, via (the concession), exchangeValue, cash,
+  floatPercent, presPercent, sharePercent, prices [{price, action}]}]`; `buy`, `sell` (with the sale's preview), `turn`
+  (+ `certsWithBids`, `bids`); `taxHaven {company, name, spender owner / haven, cash, multiple, options [{corp, from,
+  price, choice, action}]}`; `debt {amount, interest, payoff {action}, partial {min, max, step, action}}`; `choices
+  {context double_cash / special, company, companyName, options [{choice, action}]}`; `abilityChoices [{company, name,
+  kind lur / chpr / lcdr / other, options [{choice, card?, where?, action}]}]`; `acquire [{company, name, value, owner,
+  action}]`; `othersLeftOut [{kind train / private / minor, sym, owner, ownerName}]`; `tileHexes`, `tilePower`,
+  `abilities [{company, name, owner, hexes, combos, ...}]`; `tokens [{hex, city, cities, price, action, via?, tokener?,
+  tokenType?}]`; `hexToken [{hex, tokenType, action}]`; `routes {pending}`; `routeChoices {kind pullman / grain,
+  options [{choice, train {id, name}, action}]}`; `dividend [{kind, action, preview}]`; `extraDividend {train, revenue,
+  options}`; `trains`, `trainBuy` (+ `exchanges` the L→2 upgrades, `others` with `range`, `debt {afterSell, owed,
+  interest}`); `discard`; `acquireMinor {phase select / pay / token, selected, candidates [{minor, name, owner, bank,
+  action}], pay, token}`; `sawmill {hexes [{hex, company, action}], then [{choice, action}]}`; `issue [{corp, percent,
+  price, priceAfter, action}]`; `redeem`; `deadEnd` (no move left: the engine's "(Ruby raises)" words).
+- **tileOptions(hex, via)**: the generator's lays on the hex (Ruby's tile instance), each `{tile, name, rotation, cost,
+  combo, action}`. **autoRoute()**: `{action (the run as `act` stores it), revenue, subsidy, routes (+track)}`.
+- **Shadow key**: §4.3's fields: `bidboxes`, `stacks`, `auction` (stock round bids), `debt`, `tax_haven`, `credits`,
+  `exchange_tokens`, `reservations` ("hex-city"), `tile_reservations`; 1822CA `sawmill {hex, owner}`, `destinated`.
+- **site_engine**: the same commands (`state`, `keys`, `act`, `move`, `start`, `view`) for both titles.
+- **site_replay**: `--generate-1822 N --title 1822|1822CA [--rules-policy]`, `--restricted-check <files>`.
+- **Title packs** (C's to commit): `$RUST4/A/pack/title-1822.json` (1.8 MB raw, 15 KB brotli: 583 tile specs, 88
+  variants) and `title-1822CA.json` (366 KB, 856 specs, 5 variants), made from :9301's Opal bundles by a scratch copy of
+  `client/scripts/rust/titlepack.cjs` that loads every bundle the title needs (`$RUST4/A/pack/titlepack1822.cjs`,
+  `opal1822.cjs`; 1822CA needs g_1822 before g_1822_ca; the depot's private trains matched by name).
+
+### 8.6 Verification
+
+| Check | Result |
+|---|---|
+| The 11 site fixtures (rl18xx-next `public/fixtures/{1822,1822CA}`, vendored in `engine-rs/site/fixtures/g1822/`) replayed through the site layer | 11 / 11 to the end; results 11 / 11 equal (4 bank, 2 stock market, 5 manual ends) |
+| **Menus vs engine-rs's RESTRICTED set** at every position (`g1822::check`, the binding check; both directions; the generator's fallback to Ruby's set counted apart) | fixtures **9,709 / 9,709 equal**; generated games: 1822 restricted 39,676 / 39,676, 1822 rules policy 40,740 / 40,740, 1822CA restricted 20,891 / 20,891, 1822CA rules policy 22,704 / 22,707; **0 menu-only, 0 engine-only moves outside the generator's fallbacks**; every fact's action is a move, every move has a fact. **The 3 differences** (both in 1822CA rules-policy games, after cross-player trades): a minor that must buy a train where only other players' trains are within reach (gen-1822CA-5004 @964 and @1017: minor 3, trains of other players' companies at £1+; gen-1822CA-5016 @1431: minor 16) -- engine-rs's RESTRICTED set falls back to Ruby's set there (those cross-player buys), the site's menu offers nothing and says `deadEnd` "The only moves left are deals with other players' companies, which this site doesn't offer" with `othersLeftOut`. In own-only games (fixtures and restricted walks): 0 fallbacks in 70,276 positions |
+| Recorded moves through the authority (`corpus_check`: each kept move decided at its position as `site_engine move` decides it) | 9,691 moves: 9,190 accepted; refused: 377 runs that aren't the router's (§8.7 1) and the 2 out-of-order discards (§2.3 G3); of the 505 accepted runs 455 store exactly the record's fields (50 differ in the revenue string's stop order only: old records, §8.3) |
+| Ruby's auto actions after each recorded move = Rust's | 680 / 741 groups; the 61: old records made before Ruby's step auto actions (G4: DestinationToken passes and tokens, MinorAcquisition passes, one P9 choice) and 3 program disables whose reasons name players by their pre-anonymisation names |
+| Generated games through the site layer (`site_replay --generate-1822`: 2-7 players in turn, 1822's six rule combinations, moves from the menus or Ruby's whole set, posted by `act`, the written JSON replayed) | **108 games, 124,013 moves**: 1822 restricted 36 / 36 finished, rules policy 36 / 36 (3,749 cross-player moves accepted), 1822CA restricted 18 / 18, rules policy 17 / 18 + 1 stopped at the known Ruby dead end (§8.7 4); **0 generated moves refused by `act`, 108 / 108 replay to the walk's key** |
+| Title packs vs engine-rs's StaticInfo (cert limit, bank, currency, layout, corporations' home / tokens / float / share percent, companies' value / revenue, market prices, trains, phases' tiles, hexes) | 1822: 960 / 960 (every player count 2-7 × every subset of the four rules); 1822CA: 60 / 60 |
+| The wasm package vs native (`scripts/site_engine/pkg_smoke.cjs --native`: replay, view, the key equal to `site_engine state`'s, menus) | 11 / 11 fixtures; `act` / `check` / `menu` / `autoRoute` driven from the wasm at site ids 2, 3, 11 (minors' syms): 400 moves each title |
+| The seat map (site ids 2, 3, 4) | `g1822::tests::site_ids_colliding_with_minors_are_seated` |
+| §4.5: phase statuses | every phase of both titles: `ruby_phase_status()` = the title's, `site_interplayer_purchase_open` false |
+| Per move, `site_engine move` (load + replay + check + autos + key; the loaded cores) | fixtures p50 61 / p95 169 / max 222 ms (412 moves); the longest generated games (~2,000 actions) p50 158 / p95 350 / max 517 ms |
+| Gate (at 11e3ca9, the code head) | `cargo test --release --no-default-features --features python` 277 passed, 0 failed, 11 ignored (= 3a's); `--features site` 319 passed, 0 failed, 13 ignored (3a: 312 / 0 / 11; + the seven 1822 tests, + two ignored debugging aids); the 1830, 1867 and 1822 neutrality pins pass in both builds, unchanged; the wasm32 checks (`wasm,site-titles`, `wasm`) and the default `cargo check` clean; `uv sync` and `pytest tests/` in the worktree's own venv: 1,838 passed, 7 skipped, 2 deselected, 0 failed (30:34; = 3a's) |
+
+### 8.7 Known gaps
+
+1. **Runs: only the router's run** (the same trains over the same stops; any order and direction). A run drawn by hand
+   or another run of the same revenue is refused with "Only the best run can be posted for X in this title on this site
+   (the auto-router's, £N)" (§6.3 R4: engine-rs's pricer is not a validator). 377 of the fixtures' 882 recorded runs are
+   not the router's (305 equal revenue, 68 lower, 4 where the router is lower: §2.3 G1 / G2's old records). An Opal page
+   (the fallback) posts Opal's own auto-route, which may be another equal run: refused. **The bots must post the
+   generator's RunRoutes move from the site's engine commit** (the router must be the pin's).
+2. **Log lines**: Ruby's templates for the main beats only, not yet compared with Opal's (C's goldens). Missing:
+   Ruby's automatic "X skips <step>" lines, home and pending token placements' own words, minor acquisitions' "X
+   acquired Y receiving ...", the Choices round's and the privates' ability lines (closes, gains a train, moves a
+   card), phase-revenue credits, debt interest at the stock round's end, the tax haven's buys, the end-of-round train
+   export, the events' texts (concessions close, full capitalisation), "has priority deal", floats' "receives".
+3. **RawMenu**: `buy[].floats` is always false; no `blocks` (each bid lot carries its `why`), no `tileDear` (the
+   generator offers only affordable lays), `trainBuy.cheapest` null; a concession's `exchangeValue` is its face value
+   (Ruby's exchange price is `price × multiplier − value`).
+4. **Ruby's two dead ends** (the tax haven's presidency distance; a broke major owing minor 14's London token) raise
+   "(Ruby raises)" in engine-rs: the move is refused with those words and the menu says `deadEnd`; a game stops there
+   until the RL session implements the printed rules (Caleb's decision). 1 of the 108 generated games met one
+   (1822CA, rules policy: "CPR: the presidency would be ranked against the tax haven (Ruby raises)").
+5. **Server cost**: `site_engine move` replays the whole game per move (§8.6). B's engine timeout for the family must
+   allow the generator's tails (RL corpus: up to 5-9 s natively on the densest 1822CA positions; 2-3× in wasm):
+   ≥ 15 s suggested; a resident `site_engine serve` (STEP3 §3.6) would take a move to milliseconds.
+6. **Out-of-order discards** (Ruby's view lets any crowded company discard first) are refused for new moves (§2.3 G3);
+   the menu answers null for the president of a crowded company that isn't first.
+7. **B's Ruby side of the key's family fields** does not exist yet: the field list and the Ruby expression of each are
+   in `key.rs`'s module doc and §4.3. Until B has them, the keys differ in those fields only.
+8. **Snapshot**: `ending`'s words are base.rb's shape for the family's triggers; `opOrder` / `waiting` empty outside
+   operating rounds.
+9. Not supported (`unsupported:`): 1822CA ERS / WRS (other titles), any 1822CA optional rule, more than 7 or fewer than
+   2 players.
+10. **A position where only cross-player deals are left** (§8.6's 3, only after cross-player trades, which the site's
+    menus never make but an Opal page or a bot may): the site's menu offers nothing (`deadEnd`, `othersLeftOut`) while
+    engine-rs's RESTRICTED generator falls back to Ruby's set. A bot driven by RESTRICTED would buy another player's
+    train there (the authority accepts Ruby's set); a human on a Rust page can't move until such a deal is offered
+    (Caleb's own-only rule as binding; whether to offer the deal there is a decision for him).
+
+### 8.8 For B, C and the training session
+
+- **B**: the key's family fields in `lib/engine_shadow.rb` (§4.3 / `key.rs`); `round.name` is "Stock Round" / "Choose" /
+  "Operating Round"; 1822CA runs compared without Ruby pricing (D3); the family's engine timeout (§8.7 5);
+  `RUST_ENGINE_TITLES` / `ENGINE_AUTHORITY_TITLES` += 1822, 1822CA on dev; the title packs from `$RUST4/A/pack`.
+- **C**: the new hands on `bidBoxes`, `par[].via`, `taxHaven`, `debt`, `choices`, `abilityChoices`, `acquire`,
+  `routeChoices`, `extraDividend`, `acquireMinor`, `sawmill`, `issue`, `hexToken`, `deadEnd`, `othersLeftOut`; the plain
+  list on `moves` for anything else; `Snapshot.g1822`; the packs.
+- **Training session**: the edits outside `src/site` are §8.2's five (P5 ×3 files, P4, V3); the bots' driver must post
+  the generator's run (§8.7 1) and expects Ruby's step autos after its move; a bid is £5 steps in [min, max], a
+  corporation's train £1 steps, a partial payoff £1 steps, depot trains fixed (the generator's ranges, unchanged).
