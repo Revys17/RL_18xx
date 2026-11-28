@@ -520,7 +520,7 @@ impl BaseGame {
 
     /// Keep the candidates that apply (on a clone).
     fn g1822_validate(&self, cands: Vec<Move>) -> Vec<Move> {
-        let t = std::time::Instant::now();
+        let t = crate::clock::Instant::now();
         stats::add(&stats::CANDS, cands.len() as u64);
         let mut out: Vec<Move> = Vec::new();
         // (the fast path dedups through a set of the same keys `same_move`
@@ -1323,7 +1323,7 @@ impl BaseGame {
 
     /// Track step lays for the operating corporation.
     fn gen_corp_lays(&mut self, c: &str) -> Vec<Move> {
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         let tp = super::prof::start();
         let out = self.gen_corp_lays_inner(c);
         super::prof::stop(tp, || "lays:corp".into());
@@ -1633,7 +1633,7 @@ impl BaseGame {
         if let Some(v) = self.lay_restrictions_shortcut(operator, hi, def, rotation, connected_nodes, connected_edges) {
             return v;
         }
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         stats::add(&stats::RESTRICT_N, 1);
         let tp = super::prof::start();
         let r = self.lay_passes_restrictions_inner(m, operator, hi);

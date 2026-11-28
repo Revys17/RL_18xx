@@ -157,6 +157,9 @@ pub fn player_order(g: &SiteGame) -> Vec<u32> {
 }
 
 pub fn snapshot(g: &SiteGame, action_id: i64) -> Value {
+    if g.game.g1822.is_some() {
+        return super::g1822::view::snapshot(g, action_id);
+    }
     if g.game.title == "1867" {
         return super::g1867::view::snapshot(g, action_id);
     }
@@ -693,6 +696,9 @@ pub fn action_lite(g: &SiteGame, raw: &Value) -> Value {
 /// The engine part of StaticInfo (types.ts): what depends on the players, the optional rules or the title's rules
 /// data. Names, colours, logos, descriptions, hex geometry and texts come from the title pack.
 pub fn static_info(g: &SiteGame) -> Value {
+    if g.game.g1822.is_some() {
+        return super::g1822::view::static_info(g);
+    }
     if g.game.title == "1867" {
         return super::g1867::view::static_info(g);
     }
@@ -779,6 +785,7 @@ pub fn static_info(g: &SiteGame) -> Value {
 
 /// A step as the worker posts it: {index, actionId, action, log, snap}.
 pub fn step_json(g: &SiteGame, s: &super::game::StepOut) -> Value {
-    json!({"index": s.index, "actionId": s.action_id, "action": action_lite(g, &s.action), "log": s.log,
+    let lite = if g.game.g1822.is_some() { super::g1822::view::action_lite(g, &s.action) } else { action_lite(g, &s.action) };
+    json!({"index": s.index, "actionId": s.action_id, "action": lite, "log": s.log,
            "snap": snapshot(g, s.action_id)})
 }

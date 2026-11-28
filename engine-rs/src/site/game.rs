@@ -114,7 +114,7 @@ pub struct SiteGame {
     /// Each corporation's lays by operating turn (the latest few): Ruby's `OperatingInfo#laid_hexes`
     pub laid_hexes: HashMap<String, Vec<(u32, u8, Vec<String>)>>,
     /// How far the log has been handed out (`take_log`)
-    log_pos: usize,
+    pub(crate) log_pos: usize,
     /// The log lines written before the first action (step 0's)
     pub start_log: Vec<String>,
     /// Ruby's `turn_start_action_id` / `last_turn_start_action_id` (`next_turn!`: a new entity's turn or round)
@@ -122,11 +122,11 @@ pub struct SiteGame {
     pub last_turn_start: i64,
     /// When each company last changed hands (the order Ruby's `companies` lists keep)
     pub company_seq: HashMap<String, u64>,
-    company_owner: HashMap<String, String>,
-    seq: u64,
+    pub(crate) company_owner: HashMap<String, String>,
+    pub(crate) seq: u64,
     /// The players in the order they first sold this stock round (Ruby's `players_sold` keys), and that round's turn
     pub sold_order: Vec<u32>,
-    sold_turn: u32,
+    pub(crate) sold_turn: u32,
     /// The actions of the turn in progress (Ruby's `round.current_actions`, for the menu), with the engine's active
     /// step when each was processed
     pub turn_actions: Vec<Value>,
@@ -143,7 +143,7 @@ pub struct SiteGame {
     /// Engine actions processed so far (moves and their auto actions)
     pub engine_count: u64,
     /// The action being processed advanced the round's entity (Ruby next_turn!)
-    turn_advanced: bool,
+    pub(crate) turn_advanced: bool,
     /// 1867's merger round state the engine doesn't keep (Ruby's `converts`, `merge_type`)
     pub merger: super::g1867::MergerRecord,
     /// 1867: the loans each company owed interest on in the last operating round (Ruby's `@interest`, which outlives
@@ -171,6 +171,12 @@ pub struct SiteGame {
     /// (`route_check::DEPOT`), nobody once rusted (Ruby's `rust` sets it nil: `route_check::NOBODY`): what a last run's
     /// route is rebuilt for (`train_owner(train)`)
     pub train_owners: HashMap<String, Option<String>>,
+    /// The 1822 family's seat ids (docs/SITE_ENGINE_RS_1822.md §4.2): every site player id `u` is the engine's player
+    /// `u + seat_offset` (engine-rs refuses player ids equal to a corporation's sym: 1822's minors are "1".."30"). 0 for
+    /// 1830 and 1867 (their ids are the site's).
+    pub seat_offset: u32,
+    /// 1822's own records and step state the site layer keeps (`g1822::Records`)
+    pub g1822: super::g1822::Records,
 }
 
 impl Clone for SiteGame {
@@ -219,6 +225,8 @@ impl Clone for SiteGame {
             program_meta: self.program_meta.clone(),
             acting_at_end: self.acting_at_end.clone(),
             train_owners: self.train_owners.clone(),
+            seat_offset: self.seat_offset,
+            g1822: self.g1822.clone(),
         }
     }
 }
@@ -229,7 +237,7 @@ fn atype(a: &Value) -> &str {
 
 /// Ruby's `disable?` of each program (`Engine::Action::Program*`) in a round of this kind (the records' short
 /// names: "SR" stock, "OR" operating, "PR" the private auction, "MR" merger).
-fn program_disabled(p: &Value, kind: &str) -> bool {
+pub(crate) fn program_disabled(p: &Value, kind: &str) -> bool {
     let indefinite = p.get("indefinite").and_then(Value::as_bool).unwrap_or(false);
     match atype(p) {
         "program_buy_shares" => kind != "SR",
@@ -276,15 +284,27 @@ impl SiteGame {
             // 1867 (docs/SITE_ENGINE_RS_1867.md §3.1)
             return Err(unsupported("1867 for 2 players"));
         }
-        if !(2..=6).contains(&players.len()) {
+        // the 1822 family (docs/SITE_ENGINE_RS_1822.md §1.3): Ruby's PLAYER_RANGE 2-7, seated at the site's ids + 1000
+        let family = super::g1822::TITLES.contains(&title);
+        let (lo, hi) = if family { (2, 7) } else { (2, 6) };
+        if !(lo..=hi).contains(&players.len()) {
             return Err(unsupported(format!("{} players", players.len())));
         }
-        let ids: Vec<u32> = players.iter().map(|p| p.0).collect();
-        let names: HashMap<u32, String> = players.iter().map(|p| (p.0, p.1.clone())).collect();
-        let mut game = BaseGame::build_with_rules(title, ids, names, rules);
+        let seat_offset = if family { super::g1822::SEAT_BASE } else { 0 };
+        let ids: Vec<u32> = players.iter().map(|p| p.0 + seat_offset).collect();
+        let names: HashMap<u32, String> = players.iter().map(|p| (p.0 + seat_offset, p.1.clone())).collect();
+        let mut game = if family {
+            // Ruby `initialize_seed`: settings.seed, else the id's first digit run (the company stacks' shuffle)
+            BaseGame::build_seeded(title, ids, names, rules, Some(super::g1822::ruby_seed(data)))
+        } else {
+            BaseGame::build_with_rules(title, ids, names, rules)
+        };
         game.site_rules = true;
         game.site = Some(Box::default());
-        let supply = if title == "1830" {
+        let supply = if family {
+            // the 1822 engine keeps Ruby's tile supply itself (`G1822State::tile_supply_tail`)
+            TileSupply::new(&[])
+        } else if title == "1830" {
             let mut counts: Vec<(String, u32)> =
                 game.tile_counts_remaining.iter().map(|(k, v)| (k.clone(), *v)).collect();
             // Ruby's TILES order (1830's are numbered in order)
@@ -348,6 +368,8 @@ impl SiteGame {
             program_meta: BTreeMap::new(),
             acting_at_end: None,
             train_owners: HashMap::new(),
+            seat_offset,
+            g1822: Default::default(),
         };
         g.log_start();
         g.start_log = g.take_log();
@@ -467,11 +489,23 @@ impl SiteGame {
             self.acting_at_end = Some(super::authority::ruby_active_players(self));
             self.manually_ended = true;
             self.game.end_game();
+            if self.game.g1822.is_some() {
+                // (end_game!'s store_player_info in the site's ids, the family's round names: G1822's Choices)
+                let (short, offset) = (super::g1822::round_short(&self.game), self.seat_offset);
+                if let Some(e) = self.game.site.as_mut().and_then(|r| r.player_history.last_mut()) {
+                    e.round = short.to_string();
+                    for v in e.values.iter_mut() {
+                        v.0 = v.0.saturating_sub(offset);
+                    }
+                }
+            }
             self.log_game_over();
             return Ok(());
         }
         if t == "run_routes" {
-            let prices = if self.game.title == "1867" {
+            let prices = if self.game.g1822.is_some() {
+                super::g1822::price_routes(self, a)
+            } else if self.game.title == "1867" {
                 super::g1867::price_routes(self, a).unwrap_or_default()
             } else {
                 super::shadow::price_routes(self, a).unwrap_or_default()
@@ -510,6 +544,9 @@ impl SiteGame {
 
     /// An engine action in the site's JSON (Ruby's numbering): translated, processed, recorded.
     pub fn apply_engine(&mut self, a: &Value) -> Result<(), GameError> {
+        if self.game.g1822.is_some() {
+            return super::g1822::apply::apply_engine(self, a);
+        }
         let t = atype(a).to_string();
         let translated = if self.swapped.is_empty() { a.clone() } else { swap_city_refs(a, &self.swapped) };
         let action = action_from_json(&translated)?;
@@ -934,6 +971,10 @@ impl SiteGame {
             None => return,
         };
         let t = atype(a).to_string();
+        if t != "program_disable" && self.game.g1822.is_some() {
+            // G1822::Round::Stock#player_enabled_program: the winning bids now
+            super::g1822::update_stored_winning(self, pid);
+        }
         if t == "program_disable" {
             self.program_meta.remove(&pid);
         } else {
@@ -990,7 +1031,8 @@ impl SiteGame {
     // ------------------------------------------------------------------------------------------ log
 
     fn log_start(&mut self) {
-        for l in super::log::start(self) {
+        let lines = if self.game.g1822.is_some() { super::g1822::log::start(self) } else { super::log::start(self) };
+        for l in lines {
             self.log_push(l);
         }
     }
@@ -1001,7 +1043,7 @@ impl SiteGame {
         }
     }
 
-    fn log_game_over(&mut self) {
+    pub(crate) fn log_game_over(&mut self) {
         let res = self.result();
         let scores: Vec<String> = res
             .iter()
@@ -1026,7 +1068,9 @@ impl SiteGame {
     /// `sort_by.reverse` does).
     pub fn result(&self) -> Vec<(u32, i32)> {
         let r = self.game.calculate_results();
-        let mut out: Vec<(u32, i32)> = self.game.players.iter().map(|p| (p.id, r.get(&p.id).copied().unwrap_or(0))).collect();
+        // (the site's ids: the 1822 family's seats less their offset)
+        let mut out: Vec<(u32, i32)> =
+            self.game.players.iter().map(|p| (p.id - self.seat_offset, r.get(&p.id).copied().unwrap_or(0))).collect();
         out.sort_by_key(|x| x.1);
         out.reverse();
         out
@@ -1039,6 +1083,9 @@ impl SiteGame {
         }
         if self.manually_ended {
             Some("manually_ended")
+        } else if self.game.g1822.is_some() {
+            // Ruby `@game_end_reason` (G1822's GAME_END_CHECK: bank, stock_market, final_phase / final_or)
+            Some(super::g1822::end_reason(&self.game))
         } else if self.game.title == "1867" {
             // Ruby game_end_check over GAME_END_CHECK {bank: :current_or, final_phase: :one_more_full_or_set}: the
             // latched trigger whose timing comes first in GAME_END_TIMING_PRIORITY (1867: the final phase's)

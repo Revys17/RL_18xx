@@ -67,7 +67,9 @@ impl StockHistory {
 /// The stock round's turn order and whose turn it is (Ruby's `@entities`, `@entity_index`), with the round's turn.
 pub fn stock_turn(g: &SiteGame) -> Option<(u32, Vec<u32>, usize)> {
     match &g.game.round {
-        Round::Stock(s) => Some((g.game.turn, s.player_order.clone(), s.current_player_index)),
+        // (the site's ids: the 1822 family's seats less their offset; its Choices round is not a stock round)
+        Round::Stock(_) if g.game.g1822.is_some() && g.game.rnd().kind != crate::g1822::RoundKind::Stock => None,
+        Round::Stock(s) => Some((g.game.turn, s.player_order.iter().map(|&p| g.site_id(p)).collect(), s.current_player_index)),
         _ => None,
     }
 }
@@ -105,6 +107,12 @@ pub fn observe(g: &mut SiteGame, before: Option<(u32, Vec<u32>, usize)>, raw: &V
     let item = |kind: &str| HistItem { kind: kind.to_string(), entity: raw.get("entity").map(|e| e.as_str().map(str::to_string).unwrap_or_else(|| e.to_string())).unwrap_or_default(), id, created_at };
     if let Some(pid) = entity_player {
         match t.as_str() {
+            // G1822's bids: track_action(action, bid_target(action)) (the program's shenanigan check reads them)
+            "bid" if g.game.g1822.is_some() => {
+                if let Some(c) = raw.get("company").and_then(Value::as_str) {
+                    g.stock_history.track(pid, c, item("bid"));
+                }
+            }
             "buy_shares" | "sell_shares" | "par" => {
                 if let Some(c) = corp_of_shares() {
                     if !by_company || t == "buy_shares" {
@@ -183,11 +191,13 @@ fn player_name(g: &SiteGame, pid: u32) -> String {
     g.players.iter().find(|p| p.0 == pid).map(|p| p.1.clone()).unwrap_or_default()
 }
 
-/// A corporation's president (Ruby `corporation.owner`).
+/// A corporation's president (Ruby `corporation.owner`), as a site id.
 fn owner(g: &SiteGame, corp: &str) -> Option<u32> {
     let &ci = g.game.corp_idx.get(corp)?;
     let c = &g.game.corporations[ci];
-    if g.game.title == "1867" {
+    if g.game.g1822.is_some() {
+        g.game.g1822_corp_president(corp).map(|p| g.site_id(p))
+    } else if g.game.title == "1867" {
         c.owner_id.player_id().or_else(|| c.president_id())
     } else {
         c.president_id()
@@ -198,9 +208,18 @@ fn percent_of(g: &SiteGame, holder: &crate::entities::EntityId, corp: &str) -> i
     g.game.corp_idx.get(corp).map_or(0, |&ci| g.game.corporations[ci].percent_owned_by(holder) as i32)
 }
 
+/// A player's holder id in the engine (the site id seated).
+fn seated(g: &SiteGame, pid: u32) -> crate::entities::EntityId {
+    crate::entities::EntityId::player(g.seat(pid))
+}
+
 /// Ruby `check_sale_timing(entity, Share.new(corporation).to_bundle)` in a stock round: 1830 (`SELL_AFTER :first`)
 /// after the first stock round; 1867 (`:operate`) once the company has operated.
 fn sale_timing(g: &SiteGame, corp: &str) -> bool {
+    if g.game.g1822.is_some() {
+        // G1822 SELL_AFTER :full_or_turn: in a stock round, `corporation.operated?`
+        return g.game.g().operating_history.get(corp).is_some_and(|n| *n > 0);
+    }
     if g.game.title == "1867" {
         g.game.corp_idx.get(corp).is_some_and(|&ci| super::details::operated_1867(&g.game, &g.game.corporations[ci]))
     } else {
@@ -210,6 +229,10 @@ fn sale_timing(g: &SiteGame, corp: &str) -> bool {
 
 /// Ruby `action_is_shenanigan?`.
 fn shenanigan(g: &SiteGame, me: u32, other: u32, item: &HistItem, corp: &str, share: Option<&(String, u32)>) -> Option<String> {
+    if g.game.g1822.is_some() && item.kind == "bid" {
+        // G1822::Step::BuySellParShares#action_is_shenanigan?: a bid on a lot the player was winning
+        return super::g1822::stored_winning(g, me).iter().any(|c| c == corp).then(|| format!("No longer winning bid on {corp}"));
+    }
     // the share's corporation ("CPR_2" -> "CPR")
     let corp_buying = share.and_then(|s| s.0.rsplit_once('_')).map(|x| x.0);
     match item.kind.as_str() {
@@ -221,7 +244,7 @@ fn shenanigan(g: &SiteGame, me: u32, other: u32, item: &HistItem, corp: &str, sh
             if owner(g, corp) != Some(me) {
                 return None;
             }
-            let me_e = crate::entities::EntityId::player(me);
+            let me_e = seated(g, me);
             let mine = percent_of(g, &me_e, corp);
             if mine >= 50 {
                 return None;
@@ -240,7 +263,7 @@ fn shenanigan(g: &SiteGame, me: u32, other: u32, item: &HistItem, corp: &str, sh
             if let Some(b) = bigger {
                 // the buyer: a player, or a company's owner (an exchange)
                 let (holder, name) = match item.entity.parse::<u32>() {
-                    Ok(p) => (crate::entities::EntityId::player(p), player_name(g, p)),
+                    Ok(p) => (seated(g, p), player_name(g, p)),
                     Err(_) => {
                         let comp_owner = g.game.company_idx.get(item.entity.as_str()).and_then(|&mi| g.game.companies[mi].owner.player_id());
                         (crate::entities::EntityId::none(), comp_owner.map(|p| player_name(g, p)).unwrap_or_default())
@@ -298,6 +321,13 @@ fn should_stop(g: &mut SiteGame, me: u32, prog: &(Option<i64>, i64), share: Opti
         }
     }
     None
+}
+
+/// `should_stop_applying_program` for the 1822 family's stock round (`g1822::autos`): the player's program's meta,
+/// the share a buy would take.
+pub fn should_stop_1822(g: &mut SiteGame, me: u32, share: Option<&(String, u32)>, acts: &[String]) -> Option<String> {
+    let meta = g.program_meta.get(&me).cloned().unwrap_or((None, 0));
+    should_stop(g, me, &meta, share, acts)
 }
 
 /// Ruby `normal_pass?` (BuySellParSharesViaBid: not inside a minor's auction).
@@ -487,6 +517,9 @@ fn merge_autos(g: &mut SiteGame, minor: &str, now: i64) -> Vec<Value> {
 pub fn auto_actions(g: &mut SiteGame, now: i64) -> Vec<Value> {
     if g.game.finished {
         return Vec::new();
+    }
+    if g.game.g1822.is_some() {
+        return super::g1822::autos::auto_actions(g, now);
     }
     if g.game.title == "1867" {
         use crate::steps::{StepEntity, StepKind};

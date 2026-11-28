@@ -397,7 +397,7 @@ fn g1867_two_players_and_grid_market_are_unsupported() {
     data["settings"] = json!({"optional_rules": ["grid_market"]});
     assert_eq!(SiteGame::load(&data).err().unwrap(), "unsupported: optional rule grid_market");
     assert!(super::TITLES.contains(&"1867"));
-    assert_eq!(cli::version()["titles"], json!(["1830", "1867"]));
+    assert_eq!(cli::version()["titles"], json!(["1830", "1867", "1822", "1822CA"]));
     assert_eq!(cli::version()["key"], 2);
 }
 

@@ -162,6 +162,9 @@ fn open_types(g: &mut SiteGame) -> Vec<String> {
 }
 
 pub fn menu(g: &mut SiteGame, pid: u32) -> Value {
+    if g.game.g1822.is_some() {
+        return super::g1822::menu::menu(g, pid);
+    }
     if g.game.title == "1867" {
         return super::g1867::menu::menu(g, pid);
     }
@@ -1066,6 +1069,9 @@ pub(super) fn exchange_offers(g: &SiteGame, pid: u32) -> Vec<Value> {
 
 /// Every tile the engine allows on a hex, in every legal rotation: [{tile, name, color, rotation, cost, terrain, action}].
 pub fn tile_options(g: &mut SiteGame, hex: &str, via: Option<&str>) -> Result<Value, String> {
+    if g.game.g1822.is_some() {
+        return super::g1822::menu::tile_options(g, hex, via);
+    }
     if g.game.title == "1867" {
         return super::g1867::menu::tile_options(g, hex);
     }
@@ -1119,6 +1125,9 @@ pub fn tile_options(g: &mut SiteGame, hex: &str, via: Option<&str>) -> Result<Va
 /// The auto-router's best run for the acting company: {action (run_routes as the site posts it), revenue, routes
 /// (each with its track)}, or null.
 pub fn auto_route(g: &mut SiteGame) -> Value {
+    if g.game.g1822.is_some() {
+        return super::g1822::menu::auto_route(g);
+    }
     if g.game.title == "1867" {
         return super::g1867::menu::auto_route(g);
     }
@@ -1165,6 +1174,9 @@ pub fn auto_route(g: &mut SiteGame) -> Value {
 
 /// Every legal action (the RL enumeration, own-only) as site JSON: the menu's actions flattened.
 pub fn legal_actions(g: &mut SiteGame) -> Value {
+    if g.game.g1822.is_some() {
+        return super::g1822::menu::legal_actions(g);
+    }
     let pids = super::view::active_players(g);
     let mut out = Vec::new();
     for pid in pids {
