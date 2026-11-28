@@ -231,3 +231,29 @@ fn opening_key_is_rubys_start() {
         assert_eq!(k["bidboxes"]["minors"].as_array().unwrap().len(), 4);
     }
 }
+
+/// Debugging aid: the menus at the positions of a fixture where a fact appears (G1822_FACT, G1822_LOG_FIXTURE).
+#[test]
+#[ignore]
+fn print_fact_examples() {
+    let name = std::env::var("G1822_LOG_FIXTURE").unwrap_or_else(|_| "1822_game_end_stock_market".into());
+    let fact = std::env::var("G1822_FACT").unwrap_or_else(|_| "acquireMinor".into());
+    let data = fixture(&name);
+    let mut g = SiteGame::load(&data).unwrap();
+    g.site_log = false;
+    let mut shown = 0;
+    while !g.done() && shown < 3 {
+        for pid in super::active_players(&g) {
+            let m = super::menu::menu(&mut g, pid);
+            if let Some(f) = m.get(&fact) {
+                let mut f = f.clone();
+                if let Some(o) = f.as_object_mut() {
+                    o.remove("moves");
+                }
+                eprintln!("@{} {}: {}", g.current_action_id, m["description"], serde_json::to_string(&f).unwrap().chars().take(900).collect::<String>());
+                shown += 1;
+            }
+        }
+        while !g.done() && g.process_next().is_none() {}
+    }
+}

@@ -50,13 +50,15 @@ pub struct Report {
     pub engine_only: Vec<String>,
     pub foreign: Vec<String>,
     pub uncovered: BTreeMap<String, usize>,
+    /// Where the generator fell back to Ruby's set: the position and the moves it offered (the site offers none)
+    pub fallbacks: Vec<String>,
 }
 
 impl Report {
     pub fn json(&self) -> Value {
         json!({"positions": self.positions, "equal": self.equal, "fallback": self.fallback,
                "menuOnly": self.menu_only.len(), "engineOnly": self.engine_only.len(), "factsOutsideMoves": self.foreign.len(),
-               "movesWithoutFact": self.uncovered, "examples": self.menu_only.iter().chain(self.engine_only.iter()).chain(self.foreign.iter()).take(10).collect::<Vec<_>>()})
+"movesWithoutFact": self.uncovered, "fallbacks": self.fallbacks, "examples": self.menu_only.iter().chain(self.engine_only.iter()).chain(self.foreign.iter()).take(10).collect::<Vec<_>>()})
     }
 }
 
@@ -106,6 +108,8 @@ pub fn check_game(name: &str, data: &Value, r: &mut Report) -> Result<(), String
                 r.equal += 1;
             } else if fell_back {
                 r.fallback += 1;
+                let shown: Vec<&String> = engine.difference(&site).take(4).collect();
+                r.fallbacks.push(format!("{name} @{}: site {} moves, engine (Ruby's set) {}: {shown:?}", g.current_action_id, site.len(), engine.len()));
             } else {
                 for x in site.difference(&engine).take(3) {
                     r.menu_only.push(format!("{name} @{}: {x}", g.current_action_id));

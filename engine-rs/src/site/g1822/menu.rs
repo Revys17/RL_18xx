@@ -129,8 +129,16 @@ pub fn menu(g: &mut SiteGame, pid: u32) -> Value {
     // every move offered, with its range (the plain list: nothing is ever without an action)
     m.insert("moves".into(), json!(mine.iter().map(|o| json!({"type": atype(&o.action), "action": o.action, "range": o.range()})).collect::<Vec<_>>()));
     if mine.is_empty() {
-        let why = super::act::dead_end(g);
-        m.insert("deadEnd".into(), json!(why.unwrap_or_else(|| "No move is open to you here".into())));
+        // (the engine's generator would fall back to Ruby's set here; the site says why instead: a Ruby dead end's
+        // words, or that only deals with other players' companies are left)
+        let why = super::act::dead_end(g).unwrap_or_else(|| {
+            if left_out.is_empty() {
+                "No move is open to you here".into()
+            } else {
+                "The only moves left are deals with other players' companies, which this site doesn't offer".into()
+            }
+        });
+        m.insert("deadEnd".into(), json!(why));
     }
     let lo: Vec<Value> = left_out
         .iter()
