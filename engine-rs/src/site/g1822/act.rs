@@ -366,8 +366,106 @@ fn sawmill_bonuses(g: &SiteGame, corp: &str, routes: &[crate::actions::RouteData
     out
 }
 
-/// A posted run: it must be the router's (the same trains, each over the same stops); stored with Ruby's fields
-/// (`hexes`, `revenue`, `revenue_str`, `nodes`, `connections`), `extra_revenue` 0 and the run's mail subsidy.
+/// A route with Ruby's `hexes` (`Route#hexes` from the track, one entry per stop: both cities of an OO hex count, as
+/// RunRoutes#to_h stores them) where its list has fewer hexes than stops, or none (rl18xx-next's RunRoutes#h_to_args
+/// takes them from the track then); `fallback`'s when the connections say nothing.
+fn with_ruby_hexes(mut r: crate::actions::RouteData, fallback: &[String]) -> crate::actions::RouteData {
+    r.revenue = None;
+    if r.hexes.is_empty() || r.hexes.len() < r.nodes.len() {
+        r.hexes = visited(&r);
+        if r.hexes.is_empty() {
+            r.hexes = fallback.to_vec();
+        }
+    }
+    r
+}
+
+/// A route's single "local" connection (`[["local", hex]]`, Ruby's Route#connection_hexes of a local train's one stop).
+fn is_local(r: &crate::actions::RouteData) -> bool {
+    r.connections.len() == 1 && r.connections[0].first().map(String::as_str) == Some("local")
+}
+
+/// A connection's hex ("D35 0.1", an ambiguous one-hex connection, is D35's).
+fn hex_of(h: &str) -> &str {
+    h.split(' ').next().unwrap_or("")
+}
+
+/// The router's route `canon` (connections in travel order, `nodes` its stops in turn) in the form the posted
+/// connections give it, when Ruby rebuilds those as this route (Route#connection_data): the router's connections in
+/// turn or in reverse, each one's hexes either way round (a connection is found from either end, get_node_chains),
+/// with the `nodes` Ruby writes for them (each connection's two stops in the order of its hexes, in turn, repeats
+/// dropped: Route#node_signatures) and its `hexes` (Route#hexes: the stops' hexes in turn; a one-connection route's in
+/// the connection's order). A local run, or a route with a connection inside one hex (both cities of an OO hex,
+/// which Ruby's chain search finds both ways round), only as the router writes it. None for any other connections.
+fn ruby_form(conns: &[Vec<String>], canon: &crate::actions::RouteData) -> Option<crate::actions::RouteData> {
+    let k = canon.connections.len();
+    let one_hex = canon.connections.iter().any(|c| c.first().map(|h| hex_of(h)) == c.last().map(|h| hex_of(h)));
+    if is_local(canon) || one_hex || canon.nodes.len() != k + 1 {
+        return (conns == canon.connections.as_slice()).then(|| canon.clone());
+    }
+    if conns.len() != k {
+        return None;
+    }
+    let stop_hex = |n: &String| n.rsplit_once('-').map_or(n.as_str(), |x| x.0).to_string();
+    for forward in [true, false] {
+        let mut nodes: Vec<String> = Vec::new();
+        let mut ok = true;
+        for (j, pc) in conns.iter().enumerate() {
+            let i = if forward { j } else { k - 1 - j };
+            let c = &canon.connections[i];
+            let (a, b) = (&canon.nodes[i], &canon.nodes[i + 1]);
+            let ends = if pc == c {
+                [a, b]
+            } else if pc.iter().rev().eq(c.iter()) {
+                [b, a]
+            } else {
+                ok = false;
+                break;
+            };
+            for n in ends {
+                if !nodes.contains(n) {
+                    nodes.push(n.clone());
+                }
+            }
+        }
+        if !ok {
+            continue;
+        }
+        let hexes: Vec<String> = if k == 1 {
+            nodes.iter().map(stop_hex).collect()
+        } else if forward {
+            canon.nodes.iter().map(stop_hex).collect()
+        } else {
+            canon.nodes.iter().rev().map(stop_hex).collect()
+        };
+        return Some(crate::actions::RouteData { train_name: canon.train_name.clone(), hexes, revenue: None, connections: conns.to_vec(), nodes });
+    }
+    None
+}
+
+/// The hexes of a posted route's stops, sorted, from its connections (Ruby's Route#connection_data: each connection
+/// runs from one stop to the next).
+fn stop_hexes(r: &crate::actions::RouteData) -> Vec<String> {
+    let mut bare = r.clone();
+    bare.connections = r.connections.iter().map(|c| c.iter().map(|h| hex_of(h).to_string()).collect()).collect();
+    let mut out = visited(&bare);
+    out.sort();
+    out
+}
+
+/// The hexes of a route's stops, sorted, from its nodes ("D35-1").
+fn node_hexes(r: &crate::actions::RouteData) -> Vec<String> {
+    let mut out: Vec<String> = r.nodes.iter().map(|n| n.rsplit_once('-').map_or(n.as_str(), |x| x.0).to_string()).collect();
+    out.sort();
+    out
+}
+
+/// A posted run: it must be the router's (the same trains, each over the same stops: a route's `nodes`, or, posted
+/// without them as Ruby's RunRoutes allows and older records are, the hexes its connections end on); stored with
+/// Ruby's fields (`hexes`, `revenue`, `revenue_str`, `nodes`, `connections`), `extra_revenue` 0 and the run's mail
+/// subsidy. Each route is stored with the posted connections where Ruby rebuilds them as the router's route
+/// (`ruby_form`, with the nodes and hexes Ruby writes for them), else in the router's form: never in a form Ruby
+/// can't rebuild or rebuilds as another route (Ruby reads the connections; the engine prices the stops).
 pub fn checked_run(g: &mut SiteGame, a: &Value) -> Result<Value, String> {
     let corp = sval(a.get("entity"));
     let moves = rules_moves(g);
@@ -376,68 +474,57 @@ pub fn checked_run(g: &mut SiteGame, a: &Value) -> Result<Value, String> {
     };
     let crate::actions::Action::RunRoutes { routes, .. } = &m.action else { unreachable!() };
     let routes = routes.clone();
-    let posted: Vec<(String, Vec<String>)> = a
-        .get("routes")
-        .and_then(Value::as_array)
-        .map(|rs| {
-            rs.iter()
-                .map(|r| {
-                    let mut n: Vec<String> = r.get("nodes").and_then(Value::as_array).map(|v| v.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
-                    n.sort();
-                    (sval(r.get("train")), n)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut mine: Vec<(String, Vec<String>)> = routes
-        .iter()
-        .map(|r| {
-            let mut n = r.nodes.clone();
-            n.sort();
-            (r.train_name.clone(), n)
-        })
-        .collect();
-    let mut theirs = posted.clone();
-    mine.sort();
-    theirs.sort();
-    if mine != theirs {
+    let best = || {
         let total: i32 = routes.iter().map(|r| r.revenue.unwrap_or(0)).sum();
-        return Err(refused(format!(
+        refused(format!(
             "Only the best run can be posted for {corp} in this title on this site (the auto-router's, {}{total})",
             if super::is_ca(&g.game) { "$" } else { "£" }
-        )));
-    }
-    // the run as posted (its trains' order, each route's direction: what Ruby stores), each route over the router's
-    // stops; priced by the engine's Ruby pricer in that order (the destination bonus goes to the last of the biggest)
+        ))
+    };
     let Ok(crate::actions::Action::RunRoutes { routes: posted_routes, .. }) = super::super::json::action_from_json(a) else {
         return Err(refused("A run needs its routes"));
     };
-    let run: Vec<crate::actions::RouteData> = posted_routes
-        .iter()
-        .map(|p| {
-            let router = routes.iter().find(|r| r.train_name == p.train_name);
-            // (a route stored with fewer hexes than stops, or none: the router's hexes; the site's Ruby takes them from
-            // the track then, rl18xx-next's RunRoutes#h_to_args)
-            let stale = p.hexes.is_empty() || p.hexes.len() < p.nodes.len();
-            let connections = if p.connections.is_empty() { router.map(|r| r.connections.clone()).unwrap_or_default() } else { p.connections.clone() };
-            let mut route = crate::actions::RouteData {
-                train_name: p.train_name.clone(),
-                hexes: if stale { Vec::new() } else { p.hexes.clone() },
-                revenue: None,
-                connections,
-                nodes: p.nodes.clone(),
-            };
-            if stale {
-                // Ruby's Route#hexes from the track (its stops' hexes in turn: both cities of an OO hex count, as
-                // RunRoutes#to_h stores them), the router's when the connections say nothing
-                route.hexes = visited(&route);
-                if route.hexes.is_empty() {
-                    route.hexes = router.map(|r| r.hexes.clone()).unwrap_or_default();
+    // each posted route against the router's route of its train; the run as posted (its trains' order, each route's
+    // connections where Ruby rebuilds them as the router's route), priced by the engine's Ruby pricer in that order
+    // (the destination bonus goes to the last of the biggest)
+    let mut run: Vec<crate::actions::RouteData> = Vec::new();
+    for p in &posted_routes {
+        let Some(router) = routes.iter().find(|r| r.train_name == p.train_name) else { return Err(best()) };
+        let canon = with_ruby_hexes(router.clone(), &router.hexes);
+        let same_stops = if p.nodes.is_empty() {
+            // (no stops posted: Ruby takes them from the connections, whose ends are the stops' hexes)
+            !p.connections.is_empty() && stop_hexes(p) == node_hexes(&canon)
+        } else {
+            let (mut ps, mut rs) = (p.nodes.clone(), canon.nodes.clone());
+            ps.sort();
+            rs.sort();
+            ps == rs
+        };
+        let stored = match ruby_form(&p.connections, &canon) {
+            Some(mut f) => {
+                // (Ruby keeps a stored route's hexes as stored: its own records list a one-connection route's two
+                // stops in the order they were clicked, either way round)
+                let posted_hexes = with_ruby_hexes(p.clone(), &f.hexes).hexes;
+                if f.connections.len() == 1 && posted_hexes.iter().rev().eq(f.hexes.iter()) {
+                    f.hexes = posted_hexes;
                 }
+                f
             }
-            route
-        })
-        .collect();
+            None if same_stops => canon,
+            None => return Err(best()),
+        };
+        if !p.nodes.is_empty() && !same_stops {
+            return Err(best());
+        }
+        run.push(stored);
+    }
+    let (mut theirs, mut mine): (Vec<&str>, Vec<&str>) =
+        (run.iter().map(|r| r.train_name.as_str()).collect(), routes.iter().map(|r| r.train_name.as_str()).collect());
+    theirs.sort();
+    mine.sort();
+    if theirs != mine {
+        return Err(best());
+    }
     let prices = g.game.g1822_price_recorded_routes(&corp, &run).map_err(|e| refused(e.message))?;
     let run: Vec<crate::actions::RouteData> =
         run.into_iter().zip(prices.iter()).map(|(r, p)| crate::actions::RouteData { revenue: Some(*p), ..r }).collect();

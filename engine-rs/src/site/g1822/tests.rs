@@ -326,3 +326,156 @@ fn icrs_destination_auto_token_names_rubys_slot() {
     assert_eq!(token["token_type"], json!("destination"));
     assert!(token.get("slot").is_none(), "{token}");
 }
+
+/// The posted forms of a run the authority takes, and what it stores (verification of step 4: Ruby reads a stored
+/// route's connections, the engine its stops). The router's run as autoRoute gives it is stored as posted; each route
+/// run the other way round, wholly (connections, each one's hexes, hexes, nodes), likewise; connections reversed with
+/// the router's hexes and nodes get the nodes Ruby writes for them; a route over the router's stops on other track
+/// (or with connections Ruby can't read: a local run's `["I30", "local"]`) is stored in the router's form; a route
+/// posted without `nodes`, as Ruby's RunRoutes allows, is the router's when its connections end on the router's stops'
+/// hexes and is stored with the router's nodes; another run is refused.
+#[test]
+fn posted_runs_are_stored_in_a_form_ruby_rebuilds() {
+    fn at(name: &str, upto: i64) -> SiteGame {
+        let mut g = SiteGame::load(&super::super::cli::truncate(&fixture(name), Some(upto))).unwrap();
+        g.run_to(None);
+        g
+    }
+    fn routes(v: &Value) -> Vec<Value> {
+        v["routes"].as_array().cloned().unwrap_or_default()
+    }
+    fn field(r: &Value, k: &str) -> Value {
+        r.get(k).cloned().unwrap_or(Value::Null)
+    }
+    fn rev(v: &Value) -> Value {
+        json!(v.as_array().unwrap().iter().rev().cloned().collect::<Vec<_>>())
+    }
+    fn rev_conns(v: &Value) -> Value {
+        json!(v.as_array().unwrap().iter().rev().map(rev).collect::<Vec<_>>())
+    }
+    let with = |a: &Value, f: &dyn Fn(&mut Value)| {
+        let mut b = a.clone();
+        for r in b["routes"].as_array_mut().unwrap() {
+            f(r);
+        }
+        b
+    };
+
+    // 1822_game_end_stock_market @1435: LNWR's 5-0 and 7-6, four and six connections
+    let g0 = at("1822_game_end_stock_market", 1434);
+    let mut g = g0.clone();
+    let best = super::menu::auto_route(&mut g)["action"].clone();
+    assert!(routes(&best).iter().all(|r| r["connections"].as_array().unwrap().len() >= 4), "{best}");
+    let stored = |a: &Value| -> Result<Value, String> {
+        let mut g = g0.clone();
+        super::act::checked_run(&mut g, a)
+    };
+    let s = stored(&best).unwrap();
+    assert_eq!(routes(&s), routes(&best), "the router's run as posted");
+    // wholly reversed: stored as posted
+    let back = with(&best, &|r| {
+        r["connections"] = rev_conns(&r["connections"]);
+        r["hexes"] = rev(&r["hexes"]);
+        r["nodes"] = rev(&r["nodes"]);
+    });
+    let s = stored(&back).unwrap();
+    for (x, y) in routes(&s).iter().zip(routes(&back).iter()) {
+        for k in ["connections", "hexes", "nodes", "revenue"] {
+            assert_eq!(field(x, k), field(y, k), "reversed {k}");
+        }
+    }
+    // the connections reversed alone: Ruby's nodes for them (the stops in that order), the hexes likewise
+    let conns_only = with(&best, &|r| r["connections"] = rev_conns(&r["connections"]));
+    let s = stored(&conns_only).unwrap();
+    for (x, y) in routes(&s).iter().zip(routes(&back).iter()) {
+        for k in ["connections", "hexes", "nodes", "revenue"] {
+            assert_eq!(field(x, k), field(y, k), "connections reversed: {k}");
+        }
+    }
+    // the outer order reversed, each connection's hexes as the router's: Ruby's nodes are each connection's two stops
+    // in its own order, in turn (Route#node_signatures)
+    let outer = with(&best, &|r| r["connections"] = rev(&r["connections"]));
+    let s = stored(&outer).unwrap();
+    for (x, y) in routes(&s).iter().zip(routes(&best).iter()) {
+        let conns = y["connections"].as_array().unwrap();
+        let nodes = y["nodes"].as_array().unwrap();
+        let k = conns.len();
+        let mut want: Vec<Value> = Vec::new();
+        for j in 0..k {
+            for n in [&nodes[k - 1 - j], &nodes[k - j]] {
+                if !want.contains(n) {
+                    want.push(n.clone());
+                }
+            }
+        }
+        assert_eq!(field(x, "connections"), rev(&y["connections"]));
+        assert_eq!(field(x, "nodes"), json!(want));
+        assert_eq!(field(x, "hexes"), rev(&y["hexes"]));
+    }
+    // connections Ruby can't read as the router's route (here: none), stops the router's: the router's form
+    let junk = with(&best, &|r| r["connections"] = json!([["A1", "B2"]]));
+    let s = stored(&junk).unwrap();
+    assert_eq!(routes(&s), routes(&best));
+    // no nodes: the router's
+    let bare = with(&best, &|r| {
+        r.as_object_mut().unwrap().remove("nodes");
+    });
+    let s = stored(&bare).unwrap();
+    assert_eq!(routes(&s), routes(&best));
+    let bare_back = with(&back, &|r| {
+        r.as_object_mut().unwrap().remove("nodes");
+    });
+    let s = stored(&bare_back).unwrap();
+    for (x, y) in routes(&s).iter().zip(routes(&back).iter()) {
+        assert_eq!(field(x, "nodes"), field(y, "nodes"), "no nodes, reversed");
+    }
+    // no nodes and connections ending elsewhere: refused
+    let other = with(&bare, &|r| r["connections"] = json!([["A1", "B2"]]));
+    let e = stored(&other).unwrap_err();
+    assert!(e.contains("Only the best run"), "{e}");
+    // nodes of other stops: refused
+    let other = with(&best, &|r| r["nodes"] = json!(["A1-0", "B2-0"]));
+    assert!(stored(&other).is_err());
+
+    // 1822_33845 @124: minor 13's L train on London (M38), a local run; the record has no nodes
+    let g0 = at("1822_33845", 123);
+    let rec = fixture("1822_33845")["actions"].as_array().unwrap().iter().find(|a| a["id"] == json!(124)).unwrap().clone();
+    let mut g = g0.clone();
+    let best = super::menu::auto_route(&mut g)["action"].clone();
+    let s = super::act::checked_run(&mut g0.clone(), &rec).unwrap();
+    assert_eq!(routes(&s), routes(&best), "the record without nodes is the router's run");
+    let hand = with(&best, &|r| r["connections"] = rev(&r["connections"][0]).as_array().map(|c| json!([c])).unwrap());
+    assert_eq!(routes(&hand)[0]["connections"], json!([["M38", "local"]]));
+    let s = super::act::checked_run(&mut g0.clone(), &hand).unwrap();
+    assert_eq!(routes(&s), routes(&best), "a local run's connection the wrong way round: the router's form");
+}
+
+/// Debugging aid: every recorded run of the fixtures at its position -- the posted routes, the router's (autoRoute) and
+/// what `checked_run` stores or why it refuses -- one JSON line each (G1822_OUT).
+#[test]
+#[ignore]
+fn print_recorded_runs() {
+    let out = std::env::var("G1822_OUT").unwrap_or_else(|_| "/dev/stdout".into());
+    let mut lines = Vec::new();
+    for name in FIXTURES {
+        let data = fixture(name);
+        let mut g = SiteGame::load(&data).unwrap();
+        g.site_log = false;
+        while !g.done() {
+            let i = g.pos;
+            let a = g.raw[i].clone();
+            if g.kept[i] && a["type"] == "run_routes" && !g.game.finished {
+                let mut c = g.clone();
+                c.raw.truncate(c.pos);
+                c.kept.truncate(c.pos);
+                let router = super::menu::auto_route(&mut c);
+                let posted = super::to_engine(&c, &a);
+                let r = super::act::checked_run(&mut c, &a);
+                lines.push(json!({"fx": name, "id": a["id"], "posted": posted["routes"], "router": router["action"]["routes"],
+                    "ok": r.is_ok(), "err": r.as_ref().err(), "stored": r.as_ref().ok().map(|x| x["routes"].clone())}).to_string());
+            }
+            g.process_next();
+        }
+    }
+    std::fs::write(out, lines.join("\n")).unwrap();
+}
