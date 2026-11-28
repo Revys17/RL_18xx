@@ -964,7 +964,7 @@ impl BaseGame {
 
     /// G1822 `routes_subsidy`: mail contracts (P6/P7) pay half the base
     /// value of the first and last stops of the best route(s).
-    fn g1822_routes_subsidy(&self, c: &str) -> i32 {
+    pub(crate) fn g1822_routes_subsidy(&self, c: &str) -> i32 {
         let owner = EntityId::corporation(c);
         let contracts = self.fam().private_mail_contracts
             .iter()
