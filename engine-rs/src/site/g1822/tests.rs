@@ -412,6 +412,11 @@ fn posted_runs_are_stored_in_a_form_ruby_rebuilds() {
         assert_eq!(field(x, "nodes"), json!(want));
         assert_eq!(field(x, "hexes"), rev(&y["hexes"]));
     }
+    // (every form of the router's run takes the router's revenue)
+    let total = |v: &Value| -> i64 { routes(v).iter().map(|r| r["revenue"].as_i64().unwrap_or(0)).sum() };
+    for v in [&back, &conns_only, &outer] {
+        assert_eq!(total(&stored(v).unwrap()), total(&best), "revenue of {v}");
+    }
     // connections Ruby can't read as the router's route (here: none), stops the router's: the router's form
     let junk = with(&best, &|r| r["connections"] = json!([["A1", "B2"]]));
     let s = stored(&junk).unwrap();
@@ -436,6 +441,17 @@ fn posted_runs_are_stored_in_a_form_ruby_rebuilds() {
     // nodes of other stops: refused
     let other = with(&best, &|r| r["nodes"] = json!(["A1-0", "B2-0"]));
     assert!(stored(&other).is_err());
+
+    // 1822CA_game_end_bank @1259: a 7-train's route whose connections run the other way round in turn (each one's hexes
+    // as the router's), so Ruby's nodes (each connection's stops in turn, repeats dropped) aren't the order the train
+    // reaches them: priced over the stops in turn, the router's revenue
+    let g0 = at("1822CA_game_end_bank", 1258);
+    let mut g = g0.clone();
+    let best = super::menu::auto_route(&mut g)["action"].clone();
+    let outer = with(&best, &|r| r["connections"] = rev(&r["connections"]));
+    let s = super::act::checked_run(&mut g0.clone(), &outer).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(total(&s), total(&best));
+    assert!(routes(&s).iter().zip(routes(&best).iter()).any(|(x, y)| x["nodes"] != y["nodes"] && x["nodes"] != rev(&y["nodes"])), "{s}");
 
     // 1822_33845 @124: minor 13's L train on London (M38), a local run; the record has no nodes
     let g0 = at("1822_33845", 123);
