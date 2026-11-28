@@ -14,6 +14,7 @@
 pub mod act;
 pub mod apply;
 pub mod autos;
+pub mod generate;
 pub mod key;
 pub mod log;
 pub mod menu;

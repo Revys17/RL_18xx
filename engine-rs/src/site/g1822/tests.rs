@@ -309,3 +309,21 @@ fn ca_walks_are_pinned() {
 
 /// The digests of `ca_walks_are_pinned` (computed on site/engine-rs-1822 before P5, fbad02a's parent).
 const PINNED_CA: &[u64] = &[0xf3992ff745f9075c, 0xc645efc85ef47ac4, 0x160839b73374634a, 0x486dd74f0ab54232];
+
+/// Debugging aid: a fixture's whole log, one step per line group (G1822_LOG_FIXTURE, G1822_LOG_OUT).
+#[test]
+#[ignore]
+fn print_fixture_log() {
+    let name = std::env::var("G1822_LOG_FIXTURE").unwrap_or_else(|_| "1822_game_end_stock_market".into());
+    let out = std::env::var("G1822_LOG_OUT").unwrap_or_else(|_| "/dev/stdout".into());
+    let data = fixture(&name);
+    let mut g = SiteGame::load(&data).unwrap();
+    let mut text: Vec<String> = g.start_log.clone();
+    while !g.done() {
+        if let Some(s) = g.process_next() {
+            text.push(format!("# {} {}", s.action_id, s.action["type"]));
+            text.extend(s.log);
+        }
+    }
+    std::fs::write(out, text.join("\n")).unwrap();
+}

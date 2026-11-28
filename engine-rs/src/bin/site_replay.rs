@@ -7,6 +7,9 @@
 //!     [--act-check]   (1867: every recorded move checked by the generator, the step autos predicted)
 //!     [--authority]   (step 3a: every kept move decided at its position as `site_engine move` decides it)
 //!     --generate N [--seed S] [--moves M] [--out DIR]   (1867 generated games, SITE_ENGINE_RS_1867.md §10.4)
+//!     --generate-1822 N --title 1822|1822CA [--rules-policy] [--seed S] [--moves M] [--out DIR]
+//!         (1822-family generated games through the site layer, SITE_ENGINE_RS_1822.md §6.1 A2: 2-7 players and the
+//!         rule combinations in turn, each written as site JSON and replayed to the walk's key)
 //!
 //! `--views`: also build every step's snapshot (the cost of a replay with views). `--goldens <dir>`: compare with
 //! the Opal goldens (B's `test/rust/golden.cjs`) where they exist.
@@ -53,6 +56,8 @@ fn main() {
     let mut act_check = false;
     let mut authority = false;
     let mut generate: Option<usize> = None;
+    let mut generate_1822: Option<usize> = None;
+    let mut rules_policy = false;
     let mut gen_seed: u64 = 1;
     let mut gen_moves: usize = 3000;
     let mut gen_out: Option<String> = None;
@@ -86,6 +91,11 @@ fn main() {
             "--act-check" => act_check = true,
             "--authority" => authority = true,
             "--ruby-dead-ends" => gen_dead_ends = true,
+            "--generate-1822" => {
+                generate_1822 = argv.get(i + 1).and_then(|x| x.parse::<usize>().ok());
+                i += 1;
+            }
+            "--rules-policy" => rules_policy = true,
             "--generate" => {
                 generate = argv.get(i + 1).and_then(|x| x.parse::<usize>().ok());
                 i += 1;
@@ -113,6 +123,27 @@ fn main() {
             a => inputs.push(a.to_string()),
         }
         i += 1;
+    }
+    if let Some(n) = generate_1822 {
+        let title = only_title.clone().unwrap_or_else(|| "1822".into());
+        let out = gen_out.clone().unwrap_or_else(|| ".".into());
+        std::fs::create_dir_all(&out).unwrap();
+        for k in 0..n {
+            let seed = gen_seed + k as u64;
+            let players = 2 + (k % 6);
+            let rules: &[&str] = if title == "1822" { engine_rs::site::g1822::generate::RULES_1822[(k / 6) % 6] } else { &[] };
+            let t0 = Instant::now();
+            let game = engine_rs::site::g1822::generate::generate(&title, players, rules, seed, gen_moves, 0.8, rules_policy);
+            let gen_ms = t0.elapsed().as_millis() as u64;
+            let replay = engine_rs::site::g1822::generate::replays(&game);
+            let mut info = game["generated"].clone();
+            if let Some(m) = info.as_object_mut() {
+                m.remove("key");
+            }
+            std::fs::write(format!("{out}/gen-{title}-{seed}.json"), game.to_string()).unwrap();
+            println!("{}", json!({"seed": seed, "players": players, "ms": gen_ms, "replay": replay.err(), "info": info}));
+        }
+        return;
     }
     if let Some(n) = generate {
         // docs/SITE_ENGINE_RS_1867.md §10.4: generated 1867 games as site JSON (players 3-6 in turn)
