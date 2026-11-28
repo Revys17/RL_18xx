@@ -225,12 +225,18 @@ pub fn current_holder(game: &mut BaseGame) -> Option<String> {
 }
 
 /// The engine's own price of each route of a stored `run_routes` on the position before it (the shadow key's
-/// `last_action`): `title::g1867::recorded_route_revenue` (Ruby `compute_stops` + `revenue_for` over the route's
-/// connection chains).
+/// `last_action`): as the authority prices a posted run (`route_check::price_stored_1867`: Ruby `compute_stops` +
+/// `revenue_for` over the stops the rebuilt route visits, a stop's station per city); a run whose routes can't be
+/// rebuilt by `title::g1867::recorded_route_revenue` (the same over the route's connection chains, per hex).
 pub fn price_routes(g: &SiteGame, a: &serde_json::Value) -> Option<Vec<i32>> {
     let crate::actions::Action::RunRoutes { entity_id, routes, .. } = super::json::action_from_json(a).ok()? else {
         return None;
     };
+    if let Some(raw) = a.get("routes").and_then(serde_json::Value::as_array) {
+        if let Some(p) = super::route_check::price_stored_1867(g, &entity_id, raw) {
+            return Some(p);
+        }
+    }
     let mut out = Vec::new();
     for r in &routes {
         let mut bare = r.clone();

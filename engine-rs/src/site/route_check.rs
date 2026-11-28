@@ -633,19 +633,74 @@ fn node_sigs(g: &SiteGame, b: &Built) -> Vec<String> {
 }
 
 /// A route's revenue: 1830 the stops' revenues (every stop counts: n-trains to n, D unlimited); 1867 Ruby's
-/// `compute_stops` + `revenue_for` (the replay pricer, `title::g1867::recorded_route_revenue`).
+/// `compute_stops` + `revenue_for` over the stops the rebuilt route visits (`price_1867`).
 fn price(g: &SiteGame, corp: &str, r: &Value, b: &Built) -> Result<i32, String> {
     if g.game.title == "1867" {
-        let rd = crate::actions::RouteData {
-            train_name: r.get("train").and_then(Value::as_str).unwrap_or("").to_string(),
-            connections: conn_lists(r),
-            hexes: Vec::new(),
-            revenue: None,
-            nodes: Vec::new(),
-        };
-        return crate::title::g1867::recorded_route_revenue(&g.game, corp, &rd).map_err(|e| e.message);
+        return price_1867(g, corp, r.get("train").and_then(Value::as_str).unwrap_or(""), b);
     }
     Ok(b.stops().iter().map(|n| node_revenue(&g.game, n)).sum())
+}
+
+/// Ruby G1867 `compute_stops` + `revenue_for` over the route's `visited_stops`, each stop the node the route visits:
+/// its own revenue and `stop.tokened_by?(route.corporation)` of that city (Toronto's and Montreal's cities apart: a
+/// 5+5E's stops must include a city holding the company's station, not just a hex that has one; the replay pricer
+/// `title::g1867::recorded_route_revenue` asks per hex, the step-2 "R6"). The rest as that pricer: the counted kinds
+/// (5+5E: offboards; else cities and offboards) to the train's distance, the others filling best-first, the
+/// multiplier, the companies' hex bonuses (per hex once) and the capitals bonus.
+fn price_1867(g: &SiteGame, corp: &str, train: &str, b: &Built) -> Result<i32, String> {
+    use crate::revenue::{RouteBonuses, Stop, StopKind};
+    let game = &g.game;
+    let name = train.rsplit_once('-').map_or(train, |(n, _)| n);
+    let tdef = crate::title::g1867::trains().into_iter().find(|t| t.name == name).ok_or_else(|| format!("recorded route for unknown train {train:?}"))?;
+    let counted: &[StopKind] = if tdef.name == "5+5E" { &[StopKind::Offboard] } else { &[StopKind::City, StopKind::Offboard] };
+    let stops: Vec<Stop> = b
+        .stops()
+        .iter()
+        .map(|n| Stop {
+            hex: game.hexes[n.0].id.clone(),
+            kind: match n.1 {
+                E::City(_) => StopKind::City,
+                E::Town(_) => StopKind::Town,
+                _ => StopKind::Offboard,
+            },
+            revenue: node_revenue(game, n),
+            tokened: tokened_by(game, n, corp),
+        })
+        .collect();
+    let mut bonuses = RouteBonuses {
+        capital_hexes: crate::title::g1867::BONUS_CAPITALS.iter().map(|s| s.to_string()).collect(),
+        capital_partner: Some(crate::title::g1867::BONUS_REVENUE.to_string()),
+        capital_amount: 40,
+        ..Default::default()
+    };
+    let corp_eid = crate::entities::EntityId::corporation(corp);
+    for company in &game.companies {
+        if company.closed || company.owner != corp_eid {
+            continue;
+        }
+        for (hexes, amount) in crate::abilities::hex_bonuses("1867", &company.sym) {
+            bonuses.hex_bonuses.push((hexes.iter().map(|h| h.to_string()).collect(), amount));
+        }
+    }
+    crate::revenue::price_bucketed_stops(&stops, tdef.distance as usize, tdef.multiplier as i32, counted, &bonuses).map_err(|e| e.message)
+}
+
+/// A stored 1867 run priced as the authority prices a posted one (the shadow key's `last_action`): its routes
+/// rebuilt on the position before it (last first, as `check_routes`) and each priced by `price_1867`; None when a
+/// route can't be rebuilt (the caller falls back on the replay pricer).
+pub fn price_stored_1867(g: &SiteGame, corp: &str, routes: &[Value]) -> Option<Vec<i32>> {
+    let mut built: Vec<Option<Built>> = (0..routes.len()).map(|_| None).collect();
+    let mut after: Vec<PathRef> = Vec::new();
+    for k in (0..routes.len()).rev() {
+        let b = build(g, corp, &routes[k], &after).ok().filter(|b| !b.conns.is_empty())?;
+        after.extend(b.paths());
+        built[k] = Some(b);
+    }
+    routes
+        .iter()
+        .zip(built)
+        .map(|(r, b)| price_1867(g, corp, r.get("train").and_then(Value::as_str).unwrap_or(""), &b?).ok())
+        .collect()
 }
 
 /// A posted `run_routes` checked and priced: Ok(the action to process and store: each route's `revenue`,
@@ -736,5 +791,51 @@ mod tests {
         };
         assert_eq!(rows("2+2")[0].1, 2);
         assert_eq!(rows("5+5E")[0].0, vec!["offboard"]);
+    }
+
+    /// A 5+5E's stops through Toronto: CNR's station is in F16's city 1, the national's in its city 0. A route at its
+    /// four offboards with one city left to fill, through F16's city 0 and E15 (CNR's): Ruby's `compute_stops` takes
+    /// E15 (the city 0 isn't CNR's); the per-hex replay pricer took Toronto, the dearer one.
+    #[test]
+    fn a_5_5e_counts_the_station_of_the_city_it_visits() {
+        let data: Value = serde_json::from_str(include_str!("../../site/fixtures/g1867_nationalization_cash.json")).unwrap();
+        let mut d = data.clone();
+        let list = d["actions"].as_array().unwrap().clone();
+        let at = list.iter().position(|a| a["id"] == json!(389)).unwrap();
+        d["actions"] = json!(list[..at].to_vec());
+        let mut g = SiteGame::load(&d).unwrap();
+        g.site_log = false;
+        g.run_to(None);
+        let game = &g.game;
+        let hex = |id: &str| game.hexes.iter().position(|h| h.id == id).unwrap();
+        let (f16, e15) = (hex("F16"), hex("E15"));
+        assert!(tokened_by(game, &(f16, E::City(1)), "CNR") && !tokened_by(game, &(f16, E::City(0)), "CNR"));
+        assert!(tokened_by(game, &(e15, E::City(0)), "CNR"));
+        let offboards: Vec<Node> = (0..game.hexes.len())
+            .filter(|&h| !game.hexes[h].tile.offboards.is_empty() && game.hexes[h].id != "D2")
+            .take(4)
+            .map(|h| (h, E::Offboard(0)))
+            .collect();
+        assert_eq!(offboards.len(), 4);
+        let mut nodes = offboards.clone();
+        nodes.push((f16, E::City(0)));
+        nodes.push((e15, E::City(0)));
+        let chain = |a: &Node, b: &Node| Chain { a: a.clone(), b: b.clone(), paths: Vec::new() };
+        let conns: Vec<Conn> = nodes.windows(2).map(|w| Conn { left: w[0].clone(), right: w[1].clone(), chain: chain(&w[0], &w[1]) }).collect();
+        let b = Built { conns };
+        let offs: i32 = offboards.iter().map(|n| node_revenue(game, n)).sum();
+        let (toronto, e15_rev) = (node_revenue(game, &(f16, E::City(0))), node_revenue(game, &(e15, E::City(0))));
+        assert!(toronto > e15_rev, "{toronto} {e15_rev}");
+        assert_eq!(price_1867(&g, "CNR", "5+5E-0", &b), Ok((offs + e15_rev) * 2));
+        // the per-hex pricer over the same stops
+        let hexes: Vec<String> = nodes.iter().map(|n| game.hexes[n.0].id.clone()).collect();
+        let rd = crate::actions::RouteData {
+            train_name: "5+5E-0".into(),
+            connections: hexes.windows(2).map(|w| w.to_vec()).collect(),
+            hexes: Vec::new(),
+            revenue: None,
+            nodes: Vec::new(),
+        };
+        assert_eq!(crate::title::g1867::recorded_route_revenue(game, "CNR", &rd).unwrap(), (offs + toronto) * 2);
     }
 }
