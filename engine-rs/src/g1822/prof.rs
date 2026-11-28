@@ -23,13 +23,13 @@ pub fn profiling() -> bool {
 
 /// A section's start (None while the profile is off).
 #[inline]
-pub fn start() -> Option<std::time::Instant> {
-    profiling().then(std::time::Instant::now)
+pub fn start() -> Option<crate::clock::Instant> {
+    profiling().then(crate::clock::Instant::now)
 }
 
 /// Credit the time since `t0` to section `key` (a no-op while off).
 #[inline]
-pub fn stop(t0: Option<std::time::Instant>, key: impl FnOnce() -> String) {
+pub fn stop(t0: Option<crate::clock::Instant>, key: impl FnOnce() -> String) {
     let Some(t0) = t0 else { return };
     record(key, t0.elapsed().as_nanos() as u64);
 }

@@ -2699,7 +2699,7 @@ impl BaseGame {
         // one kind's walk (+ the E tours / single-city local runs):
         // (list, routes, list cut or walk exhausted, best-single bound)
         let walk = |k: Kind, thr: i32, cap: usize| -> (KindList, Vec<Walked>, bool, i32) {
-            let t_walk = std::time::Instant::now();
+            let t_walk = crate::clock::Instant::now();
             let tp = super::prof::start();
             let mut w = KWalk::new(self, &ctx, &rg, k, thr, cap);
             w.run();
@@ -2800,7 +2800,7 @@ impl BaseGame {
             best_single.push(up);
         }
         let ki = |k: &Kind| distinct.iter().position(|d| d == k).unwrap();
-        let t0 = std::time::Instant::now();
+        let t0 = crate::clock::Instant::now();
         // 1822MX revenue_for: a 3/2P train earns half (after bonuses,
         // rounded to 10)
         let half: Vec<bool> = trains.iter().map(|t| t.name.starts_with("3/2P")).collect();
@@ -2843,7 +2843,7 @@ impl BaseGame {
             }
             let mut improved = false;
             if changed {
-                let t0 = std::time::Instant::now();
+                let t0 = crate::clock::Instant::now();
                 let tp = super::prof::start();
                 let (p2, t2) = self.g1822_combine(&ctx, &kinds, &distinct, &lists, &half);
                 super::prof::stop(tp, || "router:combine:full".into());
