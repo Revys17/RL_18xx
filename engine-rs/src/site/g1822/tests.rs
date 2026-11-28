@@ -327,3 +327,21 @@ fn print_fixture_log() {
     }
     std::fs::write(out, text.join("\n")).unwrap();
 }
+
+/// The opening position's key: no laid tile, every company in the stacks or the bid boxes, no bid.
+#[test]
+fn opening_key_is_rubys_start() {
+    for title in super::TITLES {
+        let data = json!({"id": 5, "title": title, "settings": {"seed": 11}, "players": [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}, {"id": 3, "name": "C"}, {"id": 4, "name": "D"}], "actions": []});
+        let mut g = SiteGame::load(&data).unwrap();
+        let k = super::key::key(&mut g, None);
+        assert_eq!(k["hexes"], json!({}), "{title}");
+        assert_eq!(k["round"], "Stock Round");
+        assert_eq!(k["step"], "BuySellParShares");
+        assert_eq!(k["acting"], json!([1]));
+        assert!(k.get("auction").is_none());
+        let codes: BTreeSet<String> = k["companies"].as_object().unwrap().values().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert_eq!(codes, ["bank".to_string()].into_iter().collect::<BTreeSet<_>>(), "{title}");
+        assert_eq!(k["bidboxes"]["minors"].as_array().unwrap().len(), 4);
+    }
+}

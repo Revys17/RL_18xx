@@ -116,7 +116,8 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
                 "cash": c.cash,
                 "price": sp.map(|s| s.price),
                 "cell": sp.map(|s| json!([s.row, s.column])),
-                "par": c.ipo_price.as_ref().map(|s| s.price),
+                // Ruby Corporation#par_price: the share price for a company `always_market_price` (1822's minors)
+                "par": if c.always_market_price { sp.map(|s| s.price) } else { c.ipo_price.as_ref().map(|s| s.price) },
                 "floated": c.floated,
                 "closed": c.closed,
                 "ipo": ipo,
@@ -147,6 +148,10 @@ pub fn key(g: &mut SiteGame, last: Option<&Value>) -> Value {
     let discarded: Vec<String> = game.depot.discarded.iter().map(|t| t.id.clone()).collect();
     let mut hexes = Map::new();
     for h in &game.hexes {
+        // (a laid tile: Ruby's `h.tile != h.original_tile`; the preprinted ones are the engine's "preprinted_*")
+        if h.tile.id.starts_with("preprinted_") {
+            continue;
+        }
         if let Some(name) = super::super::json::tile_name(&h.tile.name) {
             hexes.insert(h.id.clone(), json!(format!("{name}@{}", h.tile.rotation)));
         }

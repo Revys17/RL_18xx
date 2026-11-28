@@ -213,7 +213,7 @@ pub fn dead_end(g: &mut SiteGame) -> Option<String> {
         return None;
     }
     let cands = g.game.g1822_candidates_debug();
-    cands.into_iter().filter_map(|(_, e)| e).find(|e| e.contains("(Ruby raises)"))
+    cands.into_iter().filter_map(|(_, e)| e).find(|e| e.contains("(Ruby raises)")).map(|e| e.trim_start_matches("GameError: ").to_string())
 }
 
 /// Ruby's revenue string of a route of the run (base `revenue_str` over `visited_hexes`, the site's Ruby: one entry

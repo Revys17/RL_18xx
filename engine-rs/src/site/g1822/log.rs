@@ -430,8 +430,8 @@ fn payouts(b: &BaseGame, a: &BaseGame, corp: &str, revenue: i32, half: bool, out
         return;
     }
     receivers.sort_by(|x, y| y.0.cmp(&x.0));
-    // (Ruby's total_shares: a minor's one 100% certificate; a major's ten 10% ones)
-    let shares = if a.is_minor(corp) { 1 } else { 100 / a.corporations[ci].share_unit_percent.max(1) as i32 };
+    // (Ruby's total_shares: 100 / share_percent; a minor's director's certificate counts as two 50% shares)
+    let shares = 100 / a.corporations[ci].share_unit_percent.max(1) as i32;
     let paid = if half { revenue - revenue / 2 } else { revenue };
     let per = paid as f64 / shares as f64;
     let per_s = if per.fract() == 0.0 { format!("{}", per as i64) } else { format!("{per}") };

@@ -213,7 +213,9 @@ pub fn entity_site_id(g: &SiteGame, e: &Ent) -> String {
 /// Ruby's `engine.corporations` in its order: every corporation in play that hasn't closed (the 1822+ ones without
 /// the expansion are never made; a closed one leaves).
 pub fn members(game: &BaseGame) -> Vec<usize> {
-    (0..game.corporations.len()).filter(|&i| !game.corporations[i].closed).collect()
+    // (1822CA's Detroit-Duluth blocker "DD" is a Corporation Ruby keeps outside `@corporations`:
+    // G1822CA#block_detroit_duluth)
+    (0..game.corporations.len()).filter(|&i| !game.corporations[i].closed && !(is_ca(game) && game.corporations[i].sym == "DD")).collect()
 }
 
 /// Ruby `@game_end_reason` once the game is over.

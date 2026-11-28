@@ -495,7 +495,9 @@ pub fn static_info(g: &SiteGame) -> Value {
         .map(|c| {
             let ci = game.corp_idx[c.sym];
             let co = &game.corporations[ci];
-            json!({"sym": c.sym, "name": c.name, "home": c.home_hex, "tokenCount": c.token_prices.len(),
+            // (a major's destination token is one of its tokens: Ruby's setup_destinations)
+            let tokens = c.token_prices.len() + (fam.destination)(c.sym).is_some() as usize;
+            json!({"sym": c.sym, "name": c.name, "home": c.home_hex, "tokenCount": tokens,
                    "floatPercent": c.float_percent, "capitalization": "incremental", "sharePercent": co.share_unit_percent,
                    "type": if co.corp_type == crate::title::CorpType::Minor { "minor" } else { "major" },
                    "destination": (fam.destination)(c.sym), "exchangeTokens": (fam.exchange_tokens)(c.sym)})
