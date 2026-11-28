@@ -1,9 +1,9 @@
 # The site on engine-rs, step 4: 1822 and 1822CA (plan)
 
 Status: **plan, 2026-11-27; package A (engine) built 2026-11-28** (§8: branch `site/engine-rs-1822`, RL_18xx worktree
-`.claude/worktrees/site-engine-1822`, on step 3a's rebased head fa11715). The plan below is unchanged; §8 is the record of
-what was built, the edits outside `src/site` function by function, the Ruby diff, the RESTRICTED-vs-menu comparison and
-the gaps. Original status: plan, 2026-11-27 (branch `site/engine-rs-1822-plan`, RL_18xx worktree `.claude/worktrees/site-1822-plan`, on
+`.claude/worktrees/site-engine-1822`, on step 3a's rebased head fa11715; the verification's fixes in §8.10, code head
+1069a7e). The plan below is unchanged; §8 is the record of what was built, the edits outside `src/site` function by
+function, the Ruby diff, the RESTRICTED-vs-menu comparison and the gaps. Original status: plan, 2026-11-27 (branch `site/engine-rs-1822-plan`, RL_18xx worktree `.claude/worktrees/site-1822-plan`, on
 `site/engine-rs-1867` b4b2391). Approved by Caleb: after the site's move to engine-rs (steps 1-3), 1822 and 1822CA
 become playable on 18xx.revys.net (`rl18xx-next`), with bots once the RL session's 1822 model is ready (run
 `gpg1822_a4_20261127`, started 2026-11-27 13:12). This document is read-only research plus a plan: nothing is built
@@ -654,8 +654,8 @@ details / program_info / liquidity`, `programs::auto_actions / stock_turn / owne
 | Check | Result |
 |---|---|
 | The 11 site fixtures (rl18xx-next `public/fixtures/{1822,1822CA}`, vendored in `engine-rs/site/fixtures/g1822/`) replayed through the site layer | 11 / 11 to the end; results 11 / 11 equal (4 bank, 2 stock market, 5 manual ends) |
-| **Menus vs engine-rs's RESTRICTED set** at every position (`g1822::check`, the binding check; both directions; the generator's fallback to Ruby's set counted apart) | fixtures **9,709 / 9,709 equal**; generated games: 1822 restricted 39,676 / 39,676, 1822 rules policy 40,740 / 40,740, 1822CA restricted 20,891 / 20,891, 1822CA rules policy 22,704 / 22,707; **0 menu-only, 0 engine-only moves outside the generator's fallbacks**; every fact's action is a move, every move has a fact. **The 3 differences** (both in 1822CA rules-policy games, after cross-player trades): a minor that must buy a train where only other players' trains are within reach (gen-1822CA-5004 @964 and @1017: minor 3, trains of other players' companies at £1+; gen-1822CA-5016 @1431: minor 16) -- engine-rs's RESTRICTED set falls back to Ruby's set there (those cross-player buys), the site's menu offers nothing and says `deadEnd` "The only moves left are deals with other players' companies, which this site doesn't offer" with `othersLeftOut`. In own-only games (fixtures and restricted walks): 0 fallbacks in 70,276 positions |
-| Recorded moves through the authority (`corpus_check`: each kept move decided at its position as `site_engine move` decides it) | 9,691 moves: 9,190 accepted; refused: 377 runs that aren't the router's (§8.7 1) and the 2 out-of-order discards (§2.3 G3); of the 505 accepted runs 455 store exactly the record's fields (50 differ in the revenue string's stop order only: old records, §8.3) |
+| **Menus vs engine-rs's RESTRICTED set** at every position (`g1822::check`, the binding check; both directions; the generator's fallback to Ruby's set counted apart) | fixtures **9,709 / 9,709 equal**; generated games: 1822 restricted 39,676 / 39,676, 1822 rules policy 40,740 / 40,740, 1822CA restricted 20,891 / 20,891, 1822CA rules policy 22,704 / 22,707; **0 menu-only, 0 engine-only moves outside the generator's fallbacks**; every fact's action is a move, every move has a fact. **The 3 differences** (both in 1822CA rules-policy games, after cross-player trades): a minor that must buy a train where only other players' trains are within reach (gen-1822CA-5004 @964 and @1017: minor 3, trains of other players' companies at £1+; gen-1822CA-5016 @1431: minor 16) -- engine-rs's RESTRICTED set falls back to Ruby's set there (those cross-player buys), the site's menu offers nothing and says `deadEnd` "The only moves left are deals with other players' companies, which this site doesn't offer" with `othersLeftOut` (since ef124bf; before it, a raising candidate's "(Ruby raises)" words: §8.10 4). In own-only games (fixtures and restricted walks): 0 fallbacks in 70,276 positions |
+| Recorded moves through the authority (`corpus_check`: each kept move decided at its position as `site_engine move` decides it) | 9,691 moves: 9,190 accepted; refused: 377 runs that aren't the router's (§8.7 1; `corpus_check` lists 60 refusals per game: 499 of the 1,004 runs) and the 2 out-of-order discards (§2.3 G3); of the 505 accepted runs 455 store exactly the record's fields (50 differ in the revenue string's stop order only: old records, §8.3). **At 1069a7e: 9,377 accepted, 312 runs refused** (§8.10) |
 | Ruby's auto actions after each recorded move = Rust's | 680 / 741 groups; the 61: old records made before Ruby's step auto actions (G4: DestinationToken passes and tokens, MinorAcquisition passes, one P9 choice) and 3 program disables whose reasons name players by their pre-anonymisation names |
 | Generated games through the site layer (`site_replay --generate-1822`: 2-7 players in turn, 1822's six rule combinations, moves from the menus or Ruby's whole set, posted by `act`, the written JSON replayed) | **108 games, 124,013 moves**: 1822 restricted 36 / 36 finished, rules policy 36 / 36 (3,749 cross-player moves accepted), 1822CA restricted 18 / 18, rules policy 17 / 18 + 1 stopped at the known Ruby dead end (§8.7 4); **0 generated moves refused by `act`, 108 / 108 replay to the walk's key** |
 | Title packs vs engine-rs's StaticInfo (cert limit, bank, currency, layout, corporations' home / tokens / float / share percent, companies' value / revenue, market prices, trains, phases' tiles, hexes) | 1822: 960 / 960 (every player count 2-7 × every subset of the four rules); 1822CA: 60 / 60 |
@@ -669,10 +669,12 @@ details / program_info / liquidity`, `programs::auto_actions / stock_turn / owne
 
 1. **Runs: only the router's run** (the same trains over the same stops; any order and direction). A run drawn by hand
    or another run of the same revenue is refused with "Only the best run can be posted for X in this title on this site
-   (the auto-router's, £N)" (§6.3 R4: engine-rs's pricer is not a validator). 377 of the fixtures' 882 recorded runs are
-   not the router's (305 equal revenue, 68 lower, 4 where the router is lower: §2.3 G1 / G2's old records). An Opal page
-   (the fallback) posts Opal's own auto-route, which may be another equal run: refused. **The bots must post the
-   generator's RunRoutes move from the site's engine commit** (the router must be the pin's).
+   (the auto-router's, £N)" (§6.3 R4: engine-rs's pricer is not a validator). At 1069a7e 312 of the fixtures' 1,004
+   recorded runs are not the router's (191 equal revenue, 117 lower, 4 where the router is lower: §2.3 G1 / G2's old
+   records); a route posted without `nodes` is matched on the hexes its connections end on, and every accepted run is
+   stored in a form Ruby rebuilds as the router's run (§8.10 1, 3). An Opal page (the fallback) posts Opal's own
+   auto-route, which may be another equal run: refused; the router's stops on other track: stored in the router's form.
+   **The bots must post the generator's RunRoutes move from the site's engine commit** (the router must be the pin's).
 2. **Log lines**: Ruby's templates for the main beats only, not yet compared with Opal's (C's goldens). Missing:
    Ruby's automatic "X skips <step>" lines, home and pending token placements' own words, minor acquisitions' "X
    acquired Y receiving ...", the Choices round's and the privates' ability lines (closes, gains a train, moves a
@@ -689,7 +691,9 @@ details / program_info / liquidity`, `programs::auto_actions / stock_turn / owne
    allow the generator's tails (RL corpus: up to 5-9 s natively on the densest 1822CA positions; 2-3× in wasm):
    ≥ 15 s suggested; a resident `site_engine serve` (STEP3 §3.6) would take a move to milliseconds.
 6. **Out-of-order discards** (Ruby's view lets any crowded company discard first) are refused for new moves (§2.3 G3);
-   the menu answers null for the president of a crowded company that isn't first.
+   the menu answers null for the president of a crowded company that isn't first. A discard naming another instance of
+   an offered train (L-2 for the generator's L-19) is accepted and stored with the generator's instance (the page
+   re-reads); on the fixtures only §2.3 G3's 2 are refused (§8.10 6).
 7. **B's Ruby side of the key's family fields** does not exist yet: the field list and the Ruby expression of each are
    in `key.rs`'s module doc and §4.3. Until B has them, the keys differ in those fields only.
 8. **Snapshot**: `ending`'s words are base.rb's shape for the family's triggers; `opOrder` / `waiting` empty outside
@@ -697,8 +701,9 @@ details / program_info / liquidity`, `programs::auto_actions / stock_turn / owne
 9. Not supported (`unsupported:`): 1822CA ERS / WRS (other titles), any 1822CA optional rule, more than 7 or fewer than
    2 players.
 10. **A position where only cross-player deals are left** (§8.6's 3, only after cross-player trades, which the site's
-    menus never make but an Opal page or a bot may): the site's menu offers nothing (`deadEnd`, `othersLeftOut`) while
-    engine-rs's RESTRICTED generator falls back to Ruby's set. A bot driven by RESTRICTED would buy another player's
+    menus never make but an Opal page or a bot may): the site's menu offers nothing (`deadEnd` "The only moves left are
+    deals with other players' companies, which this site doesn't offer", `othersLeftOut`; since ef124bf, §8.10 4)
+    while engine-rs's RESTRICTED generator falls back to Ruby's set. A bot driven by RESTRICTED would buy another player's
     train there (the authority accepts Ruby's set); a human on a Rust page can't move until such a deal is offered
     (Caleb's own-only rule as binding; whether to offer the deal there is a decision for him).
 
@@ -736,3 +741,59 @@ checks (`wasm,site-titles`, `wasm`) and the default `cargo check` clean. `src/si
 which the wheel doesn't build, so `pytest tests/` can't differ from e6599f0's; run on 2030139 in this worktree's venv
 (`uv sync --reinstall-package rl18xx`, then `pytest tests/`): **1,838 passed, 7 skipped, 2 deselected, 0 failed**
 (69:36 on cores shared with B's checks; = e6599f0's).
+
+### 8.10 After the verification (2026-11-28): what each finding became
+
+The step-4 verification (a scratch stack of rl18xx-next `next/rust-1822` on c31a88c, the fixtures, generated games and
+the Opal fallback probed) reported six findings. Fixed on this branch (three `src/site` commits: e3ec915, ef124bf, and
+1069a7e, which the first finding's fix needed once rl18xx-next's scratch stack posted hand-made forms of runs),
+rl18xx-next `next/rust-1822` and living-board `rust-1822`; **no edit outside `src/site`** (§8.2's list is unchanged: P5
+×3 files, P4, V3). The one new file outside `src/site` is test data:
+`engine-rs/site/fixtures/g1822_gen/gen-1822CA-5004-964.json` (a generated 1822CA game cut at its dead end, read only by
+`g1822::tests`; beside `site/fixtures/g1822`, so the 11-fixture sweeps don't pick it up).
+
+| # | Finding | What it became |
+|---|---|---|
+| 1 (major) | A run posted in a malformed or non-canonical form was accepted and **stored as posted**: Ruby can't load some (a local run's `[["I30", "local"]]`: "undefined method 'tile' for nil"), others it rebuilds differently ("differs: action.routes"); the admin's rollback to Ruby and an Opal page could no longer load such a game | **e3ec915**: `act::checked_run` stores each route in a form Ruby rebuilds as the router's route. `ruby_form`: the posted connections are kept only where Ruby's `Route#connection_data` reads them as the router's route -- the router's connections in turn or in reverse, each one's hexes either way round (a connection is found from either end, `get_node_chains`) -- and then the route is stored with the `nodes` Ruby writes for them (each connection's two stops in the order of its hexes, in turn, repeats dropped: `Route#node_signatures`, which Ruby recomputes after rebuilding) and Ruby's `hexes` (the stops' hexes in turn; a one-connection route's in either order, as Ruby keeps them). A local run, and a route with a connection inside one hex (both cities of an OO hex, which Ruby's chain search finds both ways round), are kept only exactly as the router writes them. **Any other form over the router's stops is stored in the router's form** (autoRoute's): other track between the same stops, the stops in another order, a local connection the wrong way round, connections reversed against their nodes, junk. The rule "only the router's run" is unchanged (the same trains over the same stops, matched on the nodes); only what is stored changed. **1069a7e**: such a form is priced over its stops in the order the train reaches them (the router's, or their reverse), since the nodes Ruby writes for connections in reverse turn aren't that order and the engine's pricer reads its route's nodes in order (on the scratch stack a 7-train's form was refused "illegal route", `1822CA_game_end_bank` @1259; an order the pricer took could have priced a form otherwise, which Ruby's check can't see in 1822CA, whose runs MRI doesn't price); the stored nodes stay Ruby's. Tests: `posted_runs_are_stored_in_a_form_ruby_rebuilds` (every form at two positions, each one's revenue the router's, @1259 too) |
+| 2 (minor) | The Opal fallback (living-board `src/titles/worker.ts`) offered other players' minors (MinorAcquisition: Ruby's `mergeable` unfiltered) and every open company (AcquireCompany: G1822's step has no `acquire_companies`, so `game.companies`) | living-board `rust-1822` 7aa5388: in the 1822 family (a game whose class is or descends from `G1822::Game`) a merge's candidates (the step's `mergeable`, nothing where it is empty: the list used to fall back to every corporation) and an acquisition's companies (Ruby's `purchasable_companies(entity)`) are kept to the acting company's president's own and the bank's; both types are offered from the list only, never as JSON (as `buy_train` / `buy_company` everywhere). With the site's Opal bundles: at the 1,339 fixture positions where Ruby's set has a minor or private acquisition (1,167 with other players' too) the list = engine-rs's RESTRICTED set at every one (before: 113); C's `test/rust/fallback1822.cjs` at every acquisition step of the fixtures, 540 / 540 and 986 / 986 (C's §11.5). The "$200" in a £ title was the probe's: the worker sets the title's money when it opens a game |
+| 3 (minor) | A run posted without `nodes` (optional in Ruby's RunRoutes; the older records) was refused although it was the router's run, with "Only the best run…" | **e3ec915**: a route without nodes is the router's when its connections end on the router's stops' hexes (Ruby takes the stops from the connections); it is stored with the posted connections and Ruby's nodes where those are a form Ruby rebuilds (above), else in the router's form. The verification's "242 refused only because nodes are missing" counted runs whose stops differ too (it added the router's nodes, which the old check compared alone): **187** of the 272 recorded runs without nodes are the router's, **85** are other runs (refused, rightly) |
+| 4 (minor) | At the 3 RESTRICTED fallback positions the menu's `deadEnd` was a raising candidate's "(Ruby raises)" words (act::dead_end first), so the page added "the printed rules … come with an engine update" while the block is the own-only rule | **ef124bf**: where deals with other players' companies are left out (`othersLeftOut`, legal moves), the menu says "The only moves left are deals with other players' companies, which this site doesn't offer" whatever a candidate of the player's own raises; a Ruby dead end's words only where Ruby's set has nothing either. The page adds the engine-update words only to "(Ruby raises)" (`G1822Hand.tsx`), so it needs no change. Test `only_cross_player_deals_left_says_so` (gen-1822CA-5004 @964; it fails on the parent with the CPR tax-haven words) |
+| 5 (minor) | Three specs hard-coded the bots' titles (`['1830']`, the boot's `deps engine g_1830`) and failed on a stack with `BOT_TITLES=1867` | rl18xx-next `next/rust-1822` 535645b: those examples stub `Lib::Bots::TITLES` to a site without BOT_TITLES |
+| 6 (minor) | Most recorded "missing" discards in the reports are not out-of-order: they name an interchangeable instance of the offered train (the authority accepts and stores the generator's instance) | Reports corrected: of the fixtures' recorded discards the menus don't offer as recorded, those naming another instance of an offered train are offered (`check` takes them and stores the menu's instance, so the page re-reads); the **2 true out-of-order discards** are §2.3 G3's (`1822CA_game_end_stock_market` @737 GWR, `1822CA_loan_payments_preserve_bank` @1086 PGE), refused "may not act now". C's `hand1822.cjs` counts the instance discards apart and gives each still-missing record the engine's own verdict (C's §11.5) |
+
+**The fixtures' recorded runs** (1,004 kept `run_routes` before a game's end; `print_recorded_runs`, an ignored
+debugging aid printing each run's verdict; §8.6's "377" was `corpus_check`'s listing, which keeps 60 refusals per game:
+the count at c31a88c was 505 accepted, 499 refused):
+
+| | c31a88c | 1069a7e |
+|---|---|---|
+| Accepted | 505 (all stored as posted) | **692**, every one at the router's revenue: with nodes 505 -- 465 stored exactly as recorded, 1 with Ruby's own nodes (a one-hex connection, `1822CA_game_end_stock_market` @63: Ruby recomputes `["AG13-0", "AG13-1"]` from the record's `["AG13-1", "AG13-0"]`; its re-post's Ruby check is equal), 39 in the router's form (other track between the same stops, or the stops in another order); without nodes 187 -- 176 with the recorded connections and Ruby's nodes added, 11 in the router's form (ef124bf: 185, two 7-train runs of `discard_trains_after_sr_export` @870 / @903 refused "illegal route" until 1069a7e) |
+| Refused ("Only the best run…") | 499 (242 without nodes) | **312**, every one another run than the router's (222 with nodes, 85 without, 5 with a local route recorded without nodes beside others): 191 of equal revenue, 117 lower, 4 higher (§2.3 G1 / G2's old records) |
+
+`corpus_check` on the fixtures: 9,691 moves, **9,377 accepted**, 312 runs and the 2 discards refused (was 9,190).
+
+**The binding check** (menus vs engine-rs's RESTRICTED set, both directions) at every fixture position after both
+commits: **9,709 / 9,709 equal, 0 menu-only, 0 engine-only, 0 fallbacks** (`menus_equal_the_restricted_set_at_every_
+fixture_position`); the generated games' 3 fallback positions (§8.6) are unchanged as moves and now carry the own-only
+words. No mismatch to report.
+
+**Ruby's side** (rl18xx-next `next/rust-1822`, its ENGINE_RS.md "The verification's findings, step 4"; a scratch stack
+with `BOT_TITLES=1867`): specs 508 / 0 in both modes; every recorded action of the fixtures through the authority
+12,094: 11,749 accepted, 343 refused (c31a88c: 11,542 / 550; 207 more runs taken; the 33 runs whose fields differ in
+revenue differ only by a mail-contract subsidy the old record lacks); the fixtures re-posted live (8,182 moves) with
+**979 hand-made forms of the auto-router's run at ef124bf and 958 at 1069a7e** (all three fields reversed, the
+connections reversed alone, their order reversed alone, a local connection the wrong way round, no nodes, junk
+connections), each undone after: all accepted but ef124bf's 7-train (1069a7e's fix), at 1069a7e every one at the
+router's revenue; **Ruby's check: every stored run equal** (1,718 and 1,330 rows, the hand-made forms among them), no
+`ruby_refused`, no `differs`; R10 refusals, and two unclassified: the 7-train (fixed) and a recorded merge after a
+re-post diverged from its record, which Ruby's own `mergeable` leaves out and its `process_merge` takes (rl18xx-next's
+known leniency, not this change).
+
+**Gate at 1069a7e** (the code head; the same at ef124bf): `--features python` 277 passed, 0 failed, 11 ignored;
+`--features site` **324 passed, 0 failed, 14 ignored** (+2 tests, +1 ignored debugging aid); the 1830, 1867 and 1822
+neutrality pins and 1822CA's walk pin pass in both builds (`neutrality.rs`, `map.rs` and `mcts*.rs` unchanged since
+fa11715); the wasm32 checks (`wasm,site-titles`, `wasm`) and the default `cargo check` clean; the wasm package built
+from the pin in rl18xx-next's docker build (`site,wasm,site-titles`). `uv sync --reinstall-package rl18xx`, then `pytest
+tests/` in this worktree's venv, on ef124bf (`src/site` is behind the `site` feature, which the wheel doesn't build, so
+1069a7e's wheel is the same): **1,838 passed, 7 skipped, 2 deselected, 0 failed** (56:45 on cores shared with the
+scratch stack's checks; = §8.9's).
