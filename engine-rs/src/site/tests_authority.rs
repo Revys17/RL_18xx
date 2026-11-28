@@ -60,6 +60,19 @@ fn every_fixture_move_is_decided_as_stored() {
         if !name.starts_with("g1867") {
             assert_eq!(r["autos"]["checked"], r["autos"]["equal"], "{name}: {}", r["autos"]["differ"]);
         }
+        // g1867_nationalization_cash keeps its programs' auto actions with the reasons blanked: equal but for those
+        if name == "g1867_nationalization_cash" {
+            let bare = |v: &Value| -> Vec<Value> {
+                v.as_array().unwrap().iter().map(|x| {
+                    let mut x = x.clone();
+                    x.as_object_mut().unwrap().remove("reason");
+                    x
+                }).collect()
+            };
+            for d in r["autos"]["differ"].as_array().unwrap() {
+                assert_eq!(bare(&d["recorded"]), bare(&d["rust"]), "{name} {}", d["id"]);
+            }
+        }
         // revenues as stored (the fixtures' older runs keep their old run strings and node orders)
         for d in r["runs"]["differ"].as_array().unwrap() {
             let rec: Vec<Value> = d["recorded"].as_array().unwrap().iter().map(|x| x[1].clone()).collect();
@@ -214,3 +227,22 @@ fn details_carry_rubys_liquidity_and_the_supply_count() {
     let seven = d["tiles"]["tiles"].as_array().unwrap().iter().find(|t| t["name"] == "7").unwrap()["left"].as_u64().unwrap();
     assert!((1..100).contains(&seven), "{seven}");
 }
+
+#[test]
+fn a_minor_won_at_auction_stops_a_share_pass_program() {
+    // g1867_nationalization_cash: 386 Player 3 (16972) turns on program_share_pass; 387 Player 4 bids $280 on TGB and
+    // wins it at once (nobody else can bid), its home station still to choose (388, Toronto); Ruby's win_bid pars TGB
+    // (an internal Par in players_history) and its round moves on only after 388. At 389 Ruby disables the program
+    // ("Corporation TGB parred") where the history cleared at 387 made a pass
+    let data = fixture("g1867_nationalization_cash");
+    let mut g = before(&data, 389);
+    let d = authority::decide(&mut g, &action(&data, 389), None, 1_800_000_000).unwrap();
+    let autos = d.action["auto_actions"].as_array().unwrap();
+    assert_eq!(autos.len(), 1, "{autos:?}");
+    assert_eq!(autos[0]["type"], "program_disable");
+    assert_eq!(autos[0]["entity"], json!(16972));
+    assert_eq!(autos[0]["reason"], "Corporation TGB parred");
+    // Player 3 keeps the turn: the recorded next move (their own pass) is legal there
+    assert!(authority::decide(&mut g, &action(&data, 390), None, 1_800_000_000).is_ok());
+}
+

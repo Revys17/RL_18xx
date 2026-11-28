@@ -35,6 +35,10 @@ pub struct StockHistory {
     /// The stock round these entries belong to (its turn); None outside a stock round
     pub round: Option<u32>,
     pub players: Vec<(u32, Vec<(String, Vec<HistItem>)>)>,
+    /// Ruby's entity index while a won minor's home station is still to be chosen: `win_bid` went to the winner
+    /// (`goto_entity!`) but `after_process` found the HomeToken step active, so the round moves on (and sets up the
+    /// next players' turns) only when the station is placed. engine-rs's round has already moved on by then.
+    pub held_at: Option<usize>,
 }
 
 impl StockHistory {
@@ -83,7 +87,7 @@ pub fn observe(g: &mut SiteGame, before: Option<(u32, Vec<u32>, usize)>, raw: &V
     // a new stock round: a fresh history, every entity visited from the first to the current one set up
     let new_round = g.stock_history.round != Some(turn) || before.as_ref().is_none_or(|b| b.0 != turn);
     if new_round {
-        g.stock_history = StockHistory { round: Some(turn), players: Vec::new() };
+        g.stock_history = StockHistory { round: Some(turn), players: Vec::new(), held_at: None };
         for k in 0..=idx.min(order.len().saturating_sub(1)) {
             if let Some(&p) = order.get(k) {
                 g.stock_history.clear(p);
@@ -116,26 +120,48 @@ pub fn observe(g: &mut SiteGame, before: Option<(u32, Vec<u32>, usize)>, raw: &V
             _ => {}
         }
     }
-    // 1867: a minor won at auction is parred by the step (an internal Par: no id, made when the move was)
-    if let Some((winner, minor)) = won_minor {
-        g.stock_history.track(winner, &minor, HistItem { kind: "par".into(), entity: winner.to_string(), id: None, created_at });
+    // 1867: a minor won at auction is parred by the step (an internal Par: no id). Ruby builds it with `Time.now`
+    // while it loads the game for a request (the site and 18xx.games load the whole game for every move, as Ruby's
+    // check does), so it compares later than every stored program (`Action#<=>` by time without an id)
+    if let Some((winner, minor)) = &won_minor {
+        g.stock_history.track(*winner, minor, HistItem { kind: "par".into(), entity: winner.to_string(), id: None, created_at: i64::MAX });
     }
     // the turn moved on: each entity the round visited had its turn set up (Round::Stock#start_entity)
     if turn_advanced {
         if let Some((_, _, bidx)) = before {
             let n = order.len().max(1);
-            if auction_before || (g.game.title == "1867" && t == "bid") {
-                // after an auction the round goes to the winner (goto_entity!: no setup), then on to the next player
-                g.stock_history.clear(order[idx % n]);
-            } else {
-                let mut k = bidx;
+            // every entity from the one after `from` to the current one set up (next_entity!, players without an
+            // action skipped: each still set up); back at `from` itself, the whole round
+            let visit = |h: &mut StockHistory, from: usize| {
+                let mut k = from;
                 for _ in 0..n {
                     k = (k + 1) % n;
-                    g.stock_history.clear(order[k]);
+                    h.clear(order[k]);
                     if k == idx {
                         break;
                     }
                 }
+            };
+            let settled = auction_before || (g.game.title == "1867" && t == "bid");
+            let winner_idx = won_minor.as_ref().and_then(|(w, _)| order.iter().position(|p| p == w));
+            if settled && winner_idx.is_some() {
+                // BuySellParShares#win_bid: the round goes to the winner (goto_entity!: no setup) and passes; the
+                // round moves on from the winner (after_process's next_entity!) unless the HomeToken step is active
+                // (the minor's home station to choose): then nobody's turn is set up until it is placed
+                let w = winner_idx.unwrap_or(0);
+                let home_pending = matches!(&g.game.round, Round::Stock(s) if !s.pending_home_tokens.is_empty());
+                if home_pending {
+                    g.stock_history.held_at = Some(w);
+                } else {
+                    visit(&mut g.stock_history, w);
+                }
+            } else if settled {
+                // (no winner seen: as before) the next player's turn set up
+                g.stock_history.clear(order[idx % n]);
+            } else {
+                // a held round (the won minor's station just placed) moves on from where Ruby's round was
+                let from = g.stock_history.held_at.take().unwrap_or(bidx);
+                visit(&mut g.stock_history, from);
             }
         }
     }
