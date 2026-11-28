@@ -2,7 +2,8 @@
 
 Status: **design 2026-11-27; package A built the same day** (§15: 00e8bf6, 3bb8916, e66ba2c and after); **the
 verification's findings fixed the same day** (§16: 0a98cc2, bcee0b1, 07a7cb2, ae87eee; all in `src/site`) (branch `site/engine-rs-step3`, RL_18xx worktree `.claude/worktrees/site-engine-step3`,
-on `site/engine-rs-1867` b4b2391; first commit **9fc1b38**, the 1822 neutrality pin, §9.1). Approved by Caleb ("Just
+on `site/engine-rs-1867` b4b2391, **rebased 2026-11-28 onto RL_18xx origin/master 341e352**, every commit kept: §17 has the
+old -> new hashes; first commit **9fc1b38**, now **08715f8**, the 1822 neutrality pin, §9.1). Approved by Caleb ("Just
 move to the Rust engine", "yes yes yes" to step 3): his site (18xx.revys.net, `rl18xx-next`) moves from the Ruby/Opal
 engine to engine-rs, keeping only the titles engine-rs implements (1830, 1867). Steps 1 and 2 (docs/SITE_ENGINE_RS.md,
 docs/SITE_ENGINE_RS_1867.md) put engine-rs in the browser (opt-in) and beside Ruby on the server (the shadow, dev and
@@ -518,8 +519,8 @@ All three pins (1830, 1867, 1822) must pass unchanged at every commit of A.
 
 | # | File, item | Edit | Status |
 |---|---|---|---|
-| N3 | `src/neutrality.rs` | the 1822 pin (tests only) | **9fc1b38** |
-| G1 | `src/map.rs` (as built, function by function below) | the corporation-graph speed-up, speed only (§11.3) | its own commit (§15) |
+| N3 | `src/neutrality.rs` | the 1822 pin (tests only) | **9fc1b38** (after the rebase, §17: **08715f8**) |
+| G1 | `src/map.rs` (as built, function by function below) | the corporation-graph speed-up, speed only (§11.3) | its own commit (§15): e66ba2c (after the rebase, §17: **025e924**) |
 | V3 | none identified | any `fn` → `pub(crate) fn` the Programmer, the route check or the 1830 move check turns out to need is listed here, function by function, before its commit | — |
 
 G1 as built, every item of `src/map.rs` it touches:
@@ -899,3 +900,54 @@ N3 and G1); the three neutrality pins pass unchanged at every commit (the `pytho
 Known gaps left (§14 updated): the Programmer's shenanigan check is time-sensitive where Ruby's is (an auto action and a
 program made in the same second compare as simultaneous in both engines: a fast repost shows it, real play doesn't);
 `site_engine serve` not built; Opal's hand still rings an unpayable hex (the fallback only).
+
+
+## 17. Rebased onto origin/master 341e352 (2026-11-28)
+
+For the training session's review and merge, and as the base of step 4 (1822: `docs/SITE_ENGINE_RS_1822.md`, branch
+`site/engine-rs-1822`, cut from this note), this branch was rebased from `site/engine-rs-1867` b4b2391 onto RL_18xx
+origin/master **341e352**. Master had gained three commits of the training session's since b4b2391: bee0b6f (search for
+generator titles, 1867), cbcfd9f (the generic search's tree release) and 341e352 (1867's encoder mover at a stock-round
+home token, which **re-pinned `PINNED_1867`** in `src/neutrality.rs` and the 1867 digests of `src/rl/encode/tests.rs`).
+Their engine-rs changes are outside `src/site` and the site layer uses none of them (`src/site` calls neither `mcts*`,
+`gumbel` nor `rl`).
+
+**No conflicts.** The only file both sides touch is `src/neutrality.rs`: master's hunk is `PINNED_1867` (the 1867
+digests and their comment), N3's is the module comment and the 1822 section appended at the end. Git merged them as they
+are, so the file is **master's, 1867 pins included, plus N3's 1822 section**: nothing of the 1867 or 1830 pins is ours,
+and the 1822 digests are N3's unchanged. Every commit kept, in order, each patch unchanged (`git patch-id --stable`
+equal for all 12); the rebased head's tree is c216528 = 5fd2c4d's tree plus master's b4b2391..341e352 changes exactly
+(the two diffs equal but for a hunk offset), so `src/site` is byte-identical to 5fd2c4d's (= ae87eee's, the code the
+verification of §16 checked). Old -> new:
+
+| Old | New | Commit |
+|---|---|---|
+| 9fc1b38 | 08715f8 | **N3**, the 1822 neutrality pin (§9.1) |
+| f566bc7 | 27befdc | this doc: the design |
+| 00e8bf6 | f2c2b34 | A1-A3: `site_engine move` / `start` / `view`, the 1830 check, the route check, the Programmer |
+| 3bb8916 | fd02116 | A5: the client gaps |
+| e66ba2c | 025e924 | **G1**, `map.rs`: the corporation graph on flat arrays (§9.2, §11.3) |
+| 1088b50 | 293fb37 | the bot view's `acting` after a bankruptcy |
+| f137ad8 | 9a459ba | this doc: package A as built |
+| 0a98cc2 | 18e00ef | §16 #1, the Programmer after a minor won at auction |
+| bcee0b1 | 5f67b90 | §16 #2, 1867 runs priced per city |
+| 07a7cb2 | 28f70c0 | §16 #7, the display gaps |
+| ae87eee | 7b863ff | §16 #8, the 1867 replay and history-jump speed |
+| 5fd2c4d | c216528 | §16 |
+
+Then this note: the branch's head, which rl18xx-next's dev site (:9301) is re-pinned to (its `engine-rs/` is c216528's
+byte for byte). §9.2's list for the training session is unchanged but for the hashes: **N3 = 08715f8**, **G1 =
+025e924**; still no V3, no `site_rules` branch, nothing in `mcts.rs`, `mcts_lockstep.rs` or the policy layouts.
+
+**Neutrality**: all three pins pass unchanged with master's 1867 pins, both at **08715f8** (master + N3 alone, a `git
+archive` built on its own: `--features python neutrality` 6 / 6, 47 s) and at the head (below; G1's graph cross-check on
+every graph the tests compute). Since the commits between them change only `src/site` and its tools, which the training
+build doesn't compile, every commit of the branch has one of those two engines.
+
+**Gate** at c216528 (under `taskset -c 24-31,56-63 nice -n 19`, `CUDA_VISIBLE_DEVICES=`): `cargo test --release
+--no-default-features --features python` **277 passed, 0 failed, 11 ignored** (273 before the rebase: master's new
+tests) and `--features site` **312 / 0 / 11** (was 308), the 1830, 1867 (master's pins) and 1822 neutrality walks and
+their determinism tests passing in both; `cargo check --target wasm32-unknown-unknown --no-default-features` with
+`--features wasm,site-titles` and with `--features wasm`, and the default `cargo check`: no errors (the shared code's
+existing warnings only); `uv sync` in this worktree's venv and the full `pytest tests/`: **1,838 passed, 7 skipped, 2
+deselected (benchmarks), 0 failed** (29:18; 1,822 before the rebase: master's new tests).
